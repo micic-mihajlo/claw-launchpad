@@ -100,7 +100,7 @@ app.post("/v1/connectors/discord/guild-channels", async (c) => {
   const body = await c.req.json().catch(() => null);
   const schema = z.object({
     token: z.string().min(1),
-    guildId: z.string().min(1),
+    guildId: z.string().min(1).regex(/^[0-9]+$/, "guildId must be a numeric Discord snowflake"),
   });
   const parsed = schema.safeParse(body);
   if (!parsed.success) {
