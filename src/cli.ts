@@ -5,6 +5,43 @@ import { provisionHetzner } from "./provision/hetzner.js";
 const program = new Command();
 program.name("clawpad").description("Provision OpenClaw reliably");
 
+const ALLOWED_AUTH_CHOICES = new Set([
+  "skip",
+  "minimax-api",
+  "anthropic-api-key",
+  "openai-api-key",
+] as const);
+
+const ALLOWED_DISCORD_GROUP_POLICIES = new Set([
+  "open",
+  "allowlist",
+  "disabled",
+] as const);
+
+function parseCsvIds(value: unknown): string[] {
+  return String(value || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function assertDiscordId(value: string, label: string) {
+  if (!/^[0-9]+$/.test(value)) {
+    throw new Error(`${label} must be a numeric Discord ID`);
+  }
+}
+
+function normalizeTailscaleHostname(value: string): string {
+  // RFC 1123 label (lowercase only): start/end alphanumeric, interior alnum or hyphen, max 63 chars.
+  const normalized = value.trim().toLowerCase();
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(normalized)) {
+    throw new Error(
+      "Invalid --tailscale-hostname. Use 1-63 chars: lowercase letters, digits, hyphen; must start/end with alphanumeric.",
+    );
+  }
+  return normalized;
+}
+
 program
   .command("hetzner:create")
   .description("Provision a Hetzner VPS and bootstrap OpenClaw")
@@ -37,21 +74,40 @@ program
   )
   .action(async (opts) => {
     const authChoice = String(opts.authChoice);
-    if (!/[a-z0-9-]+/.test(authChoice)) {
-      throw new Error("Invalid --auth-choice");
+    if (!ALLOWED_AUTH_CHOICES.has(authChoice as any)) {
+      throw new Error(
+        `Invalid --auth-choice. Expected one of: ${Array.from(ALLOWED_AUTH_CHOICES).join(", ")}`,
+      );
     }
 
-    const discordChannelIds = String(opts.discordChannelIds || "")
-      .split(",")
-      .map((entry: string) => entry.trim())
-      .filter(Boolean);
+    const tailscaleHostname = opts.tailscaleHostname
+      ? normalizeTailscaleHostname(String(opts.tailscaleHostname))
+      : undefined;
+
+    const discordGroupPolicy = opts.discordGroupPolicy ? String(opts.discordGroupPolicy) : undefined;
+    if (discordGroupPolicy && !ALLOWED_DISCORD_GROUP_POLICIES.has(discordGroupPolicy as any)) {
+      throw new Error(
+        `Invalid --discord-group-policy. Expected one of: ${Array.from(ALLOWED_DISCORD_GROUP_POLICIES).join(", ")}`,
+      );
+    }
+
+    const discordGuildId = opts.discordGuildId ? String(opts.discordGuildId) : undefined;
+    if (discordGuildId) {
+      assertDiscordId(discordGuildId, "--discord-guild-id");
+    }
+
+    const discordChannelIds = parseCsvIds(opts.discordChannelIds);
+    for (const id of discordChannelIds) {
+      assertDiscordId(id, "--discord-channel-ids");
+    }
+    const uniqueDiscordChannelIds = Array.from(new Set(discordChannelIds));
 
     const res = await provisionHetzner({
       apiToken: String(opts.apiToken),
       sshPublicKeyPath: String(opts.sshPublicKey),
       name: String(opts.name),
       tailscaleAuthKey: String(opts.tailscaleAuthKey),
-      tailscaleHostname: opts.tailscaleHostname ? String(opts.tailscaleHostname) : undefined,
+      tailscaleHostname,
       serverType: String(opts.serverType),
       image: String(opts.image),
       location: String(opts.location),
@@ -60,9 +116,9 @@ program
       anthropicApiKey: opts.anthropicApiKey ? String(opts.anthropicApiKey) : undefined,
       openaiApiKey: opts.openaiApiKey ? String(opts.openaiApiKey) : undefined,
       discordBotToken: opts.discordBotToken ? String(opts.discordBotToken) : undefined,
-      discordGroupPolicy: opts.discordGroupPolicy ? (String(opts.discordGroupPolicy) as any) : undefined,
-      discordGuildId: opts.discordGuildId ? String(opts.discordGuildId) : undefined,
-      discordChannelIds: discordChannelIds.length ? discordChannelIds : undefined,
+      discordGroupPolicy: discordGroupPolicy ? (discordGroupPolicy as any) : undefined,
+      discordGuildId,
+      discordChannelIds: uniqueDiscordChannelIds.length ? uniqueDiscordChannelIds : undefined,
     });
 
     // Print only non-sensitive outputs.

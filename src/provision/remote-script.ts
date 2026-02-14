@@ -3,7 +3,6 @@ export function buildRemoteBootstrapScript(params: {
   gatewayBind: "loopback" | "lan";
   gatewayToken: string;
   tailscaleMode: "off" | "serve";
-  tailscaleHostname?: string;
   authChoice:
     | "skip"
     | "minimax-api"
@@ -50,6 +49,8 @@ export function buildRemoteBootstrapScript(params: {
         )
       : "";
 
+  const discordGroupPolicyJson = JSON.stringify(params.discordGroupPolicy ?? "allowlist");
+
   const discordBlock = params.discordBotToken
     ? `
 
@@ -59,7 +60,7 @@ sudo -u openclaw -H env HOME=/home/openclaw DISCORD_BOT_TOKEN="$DISCORD_BOT_TOKE
 
 # Group messages policy.
 sudo -u openclaw -H env HOME=/home/openclaw \\
-  openclaw config set channels.discord.groupPolicy '"$DISCORD_GROUP_POLICY"' --json
+  openclaw config set channels.discord.groupPolicy '${discordGroupPolicyJson}' --json
 `
     : "";
 
@@ -80,7 +81,7 @@ sudo -u openclaw -H env HOME=/home/openclaw \\
 # Tailscale (Serve) for secure remote access without opening any ports.
 curl -fsSL https://tailscale.com/install.sh | sh
 systemctl enable --now tailscaled
-tailscale up --authkey "$TAILSCALE_AUTH_KEY" --hostname "${params.tailscaleHostname || "openclaw"}"
+tailscale up --authkey "$TAILSCALE_AUTH_KEY" --hostname "$TAILSCALE_HOSTNAME"
 
 # Ensure OpenClaw can manage serve/reset without full root.
 cat > /etc/sudoers.d/openclaw-tailscale <<'SUDOERS'

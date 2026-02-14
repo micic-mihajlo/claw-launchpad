@@ -30,6 +30,29 @@ function expandHome(p: string): string {
   return p;
 }
 
+function shellEscape(value: string): string {
+  // Safe for passing arbitrary bytes through a remote shell. Prevents expansions like $(), ``, $VAR, etc.
+  return `'${String(value).replace(/'/g, `'"'"'`)}'`;
+}
+
+function toRfc1123Label(value: string): string {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+
+  const sliced = normalized.slice(0, 63).replace(/-+$/, "");
+  const candidate = sliced || "openclaw";
+
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(candidate)) {
+    return "openclaw";
+  }
+  return candidate;
+}
+
 async function waitForSsh(ip: string, opts?: { timeoutMs?: number }) {
   const timeoutMs = opts?.timeoutMs ?? 180_000;
   const deadline = Date.now() + timeoutMs;
@@ -57,6 +80,8 @@ export async function provisionHetzner(params: HetznerProvisionParams) {
   if (!params.tailscaleAuthKey) {
     throw new Error("tailscaleAuthKey is required (use an ephemeral auth key)");
   }
+
+  const tailscaleHostname = toRfc1123Label(params.tailscaleHostname ?? params.name);
 
   const pubPath = expandHome(params.sshPublicKeyPath);
   const pub = fs.readFileSync(pubPath, "utf8").trim();
@@ -110,7 +135,6 @@ export async function provisionHetzner(params: HetznerProvisionParams) {
     gatewayBind: "loopback",
     gatewayToken,
     tailscaleMode: "serve",
-    tailscaleHostname: params.tailscaleHostname || params.name,
     authChoice: params.authChoice,
     minimaxApiKey: params.minimaxApiKey,
     anthropicApiKey: params.anthropicApiKey,
@@ -142,9 +166,10 @@ export async function provisionHetzner(params: HetznerProvisionParams) {
   if (params.openaiApiKey) env.OPENAI_API_KEY = params.openaiApiKey;
   if (params.discordBotToken) env.DISCORD_BOT_TOKEN = params.discordBotToken;
   env.TAILSCALE_AUTH_KEY = params.tailscaleAuthKey;
+  env.TAILSCALE_HOSTNAME = tailscaleHostname;
 
   const exportPrefix = Object.entries(env)
-    .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+    .map(([k, v]) => `${k}=${shellEscape(v)}`)
     .join(" ");
 
   await runOrThrow([
