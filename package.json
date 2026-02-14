@@ -5,6 +5,9 @@
   "type": "module",
   "description": "Provision OpenClaw reliably on VPS or BYO machines (installer + control plane scaffolding).",
   "license": "MIT",
+  "workspaces": [
+    "apps/*"
+  ],
   "engines": {
     "node": ">=22"
   },
@@ -15,13 +18,17 @@
     "dev": "tsx src/cli.ts",
     "build": "tsc -p tsconfig.json && node scripts/add-shebang.mjs",
     "check": "tsc -p tsconfig.json --noEmit",
-    "lint": "node -c dist/cli.js || true"
+    "lint": "node -c dist/cli.js || true",
+    "dev:api": "npm --workspace @clawpad/api run dev",
+    "dev:web": "npm --workspace @clawpad/web run dev",
+    "dev:all": "concurrently -n api,web -c auto \"npm run dev:api\" \"npm run dev:web\""
   },
   "dependencies": {
     "commander": "^14.0.0"
   },
   "devDependencies": {
     "@types/node": "^25.2.3",
+    "concurrently": "^9.2.1",
     "tsx": "^4.20.5",
     "typescript": "^5.8.2"
   }

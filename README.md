@@ -21,12 +21,13 @@ Launchpad bakes a repeatable bootstrap that does:
 - installs Node 22 + `openclaw@latest`
 - runs non-interactive onboarding to generate config
 - sets up a reliable systemd service
-- optionally wires Discord token and sets `channels.discord.groupPolicy`
-- puts nginx in front (HTTP only in v0)
+- enables **Tailscale Serve** (default) so the Gateway is not publicly exposed
+- wires Discord and applies a **guild/channel allowlist** so it never looks “silent”
 
 ## Status
 
-MVP CLI: `clawpad hetzner:create`.
+- MVP CLI: `clawpad hetzner:create` (Hetzner + Tailscale Serve + OpenClaw bootstrap)
+- Early web wizard: `apps/web` + `apps/api` (Discord connector modal with token test + allowlist builder)
 
 ## Usage
 
@@ -38,18 +39,30 @@ node dist/cli.js hetzner:create \
   --api-token "$HETZNER_API_TOKEN" \
   --ssh-public-key ~/.ssh/id_ed25519.pub \
   --name claw-test-1 \
+  --tailscale-auth-key "$TAILSCALE_AUTH_KEY" \
   --server-type cx23 \
   --location nbg1 \
   --auth-choice minimax-api \
   --minimax-api-key "$MINIMAX_API_KEY" \
   --discord-bot-token "$DISCORD_BOT_TOKEN" \
-  --discord-group-policy open
+  --discord-group-policy allowlist \
+  --discord-guild-id "123456789012345678" \
+  --discord-channel-ids "234567890123456789,345678901234567890"
 ```
 
 It prints JSON including the gateway token.
+
+## Dev (wizard UI)
+
+```bash
+# API (defaults to :8788)
+npm run dev:api
+
+# Web (defaults to :5173)
+npm run dev:web
+```
 
 ## Docs
 
 - `docs/PLATFORM.md` (what the proper platform should look like)
 - `docs/BYO.md` (bring-your-own hardware: what you sell)
-

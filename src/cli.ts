@@ -11,6 +11,8 @@ program
   .requiredOption("--api-token <token>", "Hetzner API token")
   .requiredOption("--ssh-public-key <path>", "Path to SSH public key (.pub)")
   .requiredOption("--name <name>", "Server name")
+  .requiredOption("--tailscale-auth-key <key>", "Tailscale auth key (ephemeral recommended)")
+  .option("--tailscale-hostname <name>", "Tailscale hostname (default: server name)")
   .option("--server-type <type>", "Hetzner server type", "cx23")
   .option("--image <image>", "Hetzner image", "ubuntu-24.04")
   .option("--location <loc>", "Hetzner location", "nbg1")
@@ -28,16 +30,28 @@ program
     "Discord group policy (open|allowlist|disabled)",
     "allowlist",
   )
+  .option("--discord-guild-id <id>", "Discord guild id (required for allowlist)")
+  .option(
+    "--discord-channel-ids <ids>",
+    "Comma-separated Discord channel IDs to allow (required for allowlist)",
+  )
   .action(async (opts) => {
     const authChoice = String(opts.authChoice);
     if (!/[a-z0-9-]+/.test(authChoice)) {
       throw new Error("Invalid --auth-choice");
     }
 
+    const discordChannelIds = String(opts.discordChannelIds || "")
+      .split(",")
+      .map((entry: string) => entry.trim())
+      .filter(Boolean);
+
     const res = await provisionHetzner({
       apiToken: String(opts.apiToken),
       sshPublicKeyPath: String(opts.sshPublicKey),
       name: String(opts.name),
+      tailscaleAuthKey: String(opts.tailscaleAuthKey),
+      tailscaleHostname: opts.tailscaleHostname ? String(opts.tailscaleHostname) : undefined,
       serverType: String(opts.serverType),
       image: String(opts.image),
       location: String(opts.location),
@@ -47,6 +61,8 @@ program
       openaiApiKey: opts.openaiApiKey ? String(opts.openaiApiKey) : undefined,
       discordBotToken: opts.discordBotToken ? String(opts.discordBotToken) : undefined,
       discordGroupPolicy: opts.discordGroupPolicy ? (String(opts.discordGroupPolicy) as any) : undefined,
+      discordGuildId: opts.discordGuildId ? String(opts.discordGuildId) : undefined,
+      discordChannelIds: discordChannelIds.length ? discordChannelIds : undefined,
     });
 
     // Print only non-sensitive outputs.
