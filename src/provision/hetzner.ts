@@ -83,6 +83,19 @@ export async function provisionHetzner(params: HetznerProvisionParams) {
 
   const tailscaleHostname = toRfc1123Label(params.tailscaleHostname ?? params.name);
 
+  // Validate billable inputs up-front (before creating any cloud resources).
+  const effectiveDiscordGroupPolicy =
+    params.discordGroupPolicy ?? (params.discordBotToken ? "allowlist" : "disabled");
+  if (params.discordBotToken && effectiveDiscordGroupPolicy === "allowlist") {
+    if (!params.discordGuildId) {
+      throw new Error("discordGuildId is required when discordGroupPolicy=allowlist");
+    }
+    const channels = Array.isArray(params.discordChannelIds) ? params.discordChannelIds : [];
+    if (channels.length === 0) {
+      throw new Error("discordChannelIds is required when discordGroupPolicy=allowlist");
+    }
+  }
+
   const pubPath = expandHome(params.sshPublicKeyPath);
   const pub = fs.readFileSync(pubPath, "utf8").trim();
   if (!pub.startsWith("ssh-")) {
@@ -120,16 +133,6 @@ export async function provisionHetzner(params: HetznerProvisionParams) {
 
   await waitForSsh(ip);
 
-  if (params.discordBotToken && params.discordGroupPolicy === "allowlist") {
-    if (!params.discordGuildId) {
-      throw new Error("discordGuildId is required when discordGroupPolicy=allowlist");
-    }
-    const channels = Array.isArray(params.discordChannelIds) ? params.discordChannelIds : [];
-    if (channels.length === 0) {
-      throw new Error("discordChannelIds is required when discordGroupPolicy=allowlist");
-    }
-  }
-
   const script = buildRemoteBootstrapScript({
     gatewayPort: 18789,
     gatewayBind: "loopback",
@@ -140,7 +143,7 @@ export async function provisionHetzner(params: HetznerProvisionParams) {
     anthropicApiKey: params.anthropicApiKey,
     openaiApiKey: params.openaiApiKey,
     discordBotToken: params.discordBotToken,
-    discordGroupPolicy: params.discordGroupPolicy,
+    discordGroupPolicy: effectiveDiscordGroupPolicy as any,
     discordGuildId: params.discordGuildId,
     discordChannelIds: params.discordChannelIds,
   });

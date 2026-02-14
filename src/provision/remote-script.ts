@@ -30,8 +30,21 @@ export function buildRemoteBootstrapScript(params: {
           ? '--openai-api-key "$OPENAI_API_KEY"'
           : "";
 
+  const effectiveDiscordGroupPolicy = params.discordGroupPolicy ?? "allowlist";
+  const allowlistEnabled = Boolean(
+    params.discordBotToken && effectiveDiscordGroupPolicy === "allowlist",
+  );
+  if (allowlistEnabled) {
+    if (!params.discordGuildId) {
+      throw new Error("discordGuildId is required when discordGroupPolicy=allowlist");
+    }
+    if (!Array.isArray(params.discordChannelIds) || params.discordChannelIds.length === 0) {
+      throw new Error("discordChannelIds is required when discordGroupPolicy=allowlist");
+    }
+  }
+
   const discordGuildsJson =
-    params.discordBotToken && params.discordGroupPolicy === "allowlist"
+    allowlistEnabled
       ? JSON.stringify(
           {
             [String(params.discordGuildId)]: {
@@ -49,7 +62,7 @@ export function buildRemoteBootstrapScript(params: {
         )
       : "";
 
-  const discordGroupPolicyJson = JSON.stringify(params.discordGroupPolicy ?? "allowlist");
+  const discordGroupPolicyJson = JSON.stringify(effectiveDiscordGroupPolicy);
 
   const discordBlock = params.discordBotToken
     ? `
@@ -65,7 +78,7 @@ sudo -u openclaw -H env HOME=/home/openclaw \\
     : "";
 
   const discordAllowlistBlock =
-    params.discordBotToken && params.discordGroupPolicy === "allowlist"
+    allowlistEnabled
       ? `
 
 # Allowlist: only the configured channels are accepted.

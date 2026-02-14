@@ -90,6 +90,10 @@ program
         `Invalid --discord-group-policy. Expected one of: ${Array.from(ALLOWED_DISCORD_GROUP_POLICIES).join(", ")}`,
       );
     }
+    const effectiveDiscordGroupPolicy = (discordGroupPolicy ?? "allowlist") as
+      | "open"
+      | "allowlist"
+      | "disabled";
 
     const discordGuildId = opts.discordGuildId ? String(opts.discordGuildId) : undefined;
     if (discordGuildId) {
@@ -101,6 +105,18 @@ program
       assertDiscordId(id, "--discord-channel-ids");
     }
     const uniqueDiscordChannelIds = Array.from(new Set(discordChannelIds));
+
+    const discordBotToken = opts.discordBotToken ? String(opts.discordBotToken) : undefined;
+    if (discordBotToken && effectiveDiscordGroupPolicy === "allowlist") {
+      if (!discordGuildId) {
+        throw new Error("--discord-guild-id is required when --discord-group-policy=allowlist");
+      }
+      if (uniqueDiscordChannelIds.length === 0) {
+        throw new Error(
+          "--discord-channel-ids is required when --discord-group-policy=allowlist",
+        );
+      }
+    }
 
     const res = await provisionHetzner({
       apiToken: String(opts.apiToken),
@@ -115,8 +131,8 @@ program
       minimaxApiKey: opts.minimaxApiKey ? String(opts.minimaxApiKey) : undefined,
       anthropicApiKey: opts.anthropicApiKey ? String(opts.anthropicApiKey) : undefined,
       openaiApiKey: opts.openaiApiKey ? String(opts.openaiApiKey) : undefined,
-      discordBotToken: opts.discordBotToken ? String(opts.discordBotToken) : undefined,
-      discordGroupPolicy: discordGroupPolicy ? (discordGroupPolicy as any) : undefined,
+      discordBotToken,
+      discordGroupPolicy: effectiveDiscordGroupPolicy,
       discordGuildId,
       discordChannelIds: uniqueDiscordChannelIds.length ? uniqueDiscordChannelIds : undefined,
     });
