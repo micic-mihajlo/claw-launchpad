@@ -2,6 +2,7 @@ export function buildRemoteBootstrapScript(params: {
   gatewayPort: number;
   gatewayBind: "loopback" | "lan";
   gatewayToken: string;
+  tailscaleMode: "off" | "serve";
   authChoice:
     | "skip"
     | "minimax-api"
@@ -13,6 +14,8 @@ export function buildRemoteBootstrapScript(params: {
   openaiApiKey?: string;
   discordBotToken?: string;
   discordGroupPolicy?: "open" | "allowlist" | "disabled";
+  discordGuildId?: string;
+  discordChannelIds?: string[];
 }): string {
   // IMPORTANT: This function uses a TS template string to generate a bash script.
   // Do not emit any literal "${...}" sequences inside the script, because those
@@ -27,6 +30,40 @@ export function buildRemoteBootstrapScript(params: {
           ? '--openai-api-key "$OPENAI_API_KEY"'
           : "";
 
+  const effectiveDiscordGroupPolicy = params.discordGroupPolicy ?? "allowlist";
+  const allowlistEnabled = Boolean(
+    params.discordBotToken && effectiveDiscordGroupPolicy === "allowlist",
+  );
+  if (allowlistEnabled) {
+    if (!params.discordGuildId) {
+      throw new Error("discordGuildId is required when discordGroupPolicy=allowlist");
+    }
+    if (!Array.isArray(params.discordChannelIds) || params.discordChannelIds.length === 0) {
+      throw new Error("discordChannelIds is required when discordGroupPolicy=allowlist");
+    }
+  }
+
+  const discordGuildsJson =
+    allowlistEnabled
+      ? JSON.stringify(
+          {
+            [String(params.discordGuildId)]: {
+              requireMention: true,
+              channels: Object.fromEntries(
+                (params.discordChannelIds ?? []).map((channelId) => [
+                  String(channelId),
+                  { allow: true, requireMention: true },
+                ]),
+              ),
+            },
+          },
+          null,
+          0,
+        )
+      : "";
+
+  const discordGroupPolicyJson = JSON.stringify(effectiveDiscordGroupPolicy);
+
   const discordBlock = params.discordBotToken
     ? `
 
@@ -34,12 +71,40 @@ export function buildRemoteBootstrapScript(params: {
 sudo -u openclaw -H env HOME=/home/openclaw DISCORD_BOT_TOKEN="$DISCORD_BOT_TOKEN" \\
   openclaw channels add --channel discord --use-env
 
-# Make guild behavior explicit so the bot doesn't look "silent" by default.
-# Safer: allowlist + configure guilds/channels. Better DX: open.
+# Group messages policy.
 sudo -u openclaw -H env HOME=/home/openclaw \\
-  openclaw config set channels.discord.groupPolicy '"$DISCORD_GROUP_POLICY"' --json
+  openclaw config set channels.discord.groupPolicy '${discordGroupPolicyJson}' --json
 `
     : "";
+
+  const discordAllowlistBlock =
+    allowlistEnabled
+      ? `
+
+# Allowlist: only the configured channels are accepted.
+sudo -u openclaw -H env HOME=/home/openclaw \\
+  openclaw config set channels.discord.guilds '${discordGuildsJson}' --json
+`
+      : "";
+
+  const tailscaleInstallBlock =
+    params.tailscaleMode === "serve"
+      ? `
+
+# Tailscale (Serve) for secure remote access without opening any ports.
+curl -fsSL https://tailscale.com/install.sh | sh
+systemctl enable --now tailscaled
+tailscale up --authkey "$TAILSCALE_AUTH_KEY" --hostname "$TAILSCALE_HOSTNAME"
+
+# Ensure OpenClaw can manage serve/reset without full root.
+cat > /etc/sudoers.d/openclaw-tailscale <<'SUDOERS'
+openclaw ALL=(root) NOPASSWD: /usr/bin/tailscale serve *, /usr/bin/tailscale serve reset
+SUDOERS
+chmod 440 /etc/sudoers.d/openclaw-tailscale
+`
+      : "";
+
+  const tailscaleOnboardArg = params.tailscaleMode === "serve" ? "--tailscale serve" : "";
 
   return `#!/usr/bin/env bash
 set -eo pipefail
@@ -48,7 +113,8 @@ export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 
 apt-get update
-apt-get install -y ca-certificates curl gnupg nginx ufw
+apt-get install -y ca-certificates curl gnupg ufw
+${tailscaleInstallBlock}
 
 # Node 22
 mkdir -p /etc/apt/keyrings
@@ -66,6 +132,7 @@ if ! id -u openclaw >/dev/null 2>&1; then
 fi
 mkdir -p /home/openclaw/.openclaw
 chown -R openclaw:openclaw /home/openclaw/.openclaw
+usermod -aG tailscale openclaw >/dev/null 2>&1 || true
 
 # Root-owned env file for runtime secrets (passed via systemd EnvironmentFile)
 install -d -m 0755 /etc/openclaw
@@ -88,8 +155,9 @@ sudo -u openclaw -H env \\
   OPENAI_API_KEY="$OPENAI_API_KEY" \\
   openclaw onboard --non-interactive --accept-risk --no-install-daemon --skip-channels --skip-skills --skip-ui --skip-health \\
     --gateway-bind ${params.gatewayBind} --gateway-port ${params.gatewayPort} --gateway-auth token --gateway-token "$OPENCLAW_GATEWAY_TOKEN" \\
-    --auth-choice ${params.authChoice} ${onboardKeyArg}
+    ${tailscaleOnboardArg} --auth-choice ${params.authChoice} ${onboardKeyArg}
 ${discordBlock}
+${discordAllowlistBlock}
 
 # Systemd service (system-level: reliable on headless VPS)
 cat > /etc/systemd/system/openclaw-gateway.service <<SYSTEMD
@@ -118,47 +186,11 @@ systemctl daemon-reload
 systemctl enable openclaw-gateway
 systemctl restart openclaw-gateway
 
-# Nginx reverse proxy (HTTP only for now)
-cat > /etc/nginx/sites-available/openclaw <<'NGINX'
-upstream openclaw_gateway {
-  server 127.0.0.1:${params.gatewayPort};
-  keepalive 64;
-}
-server {
-  listen 80 default_server;
-  listen [::]:80 default_server;
-  server_name _;
-
-  client_max_body_size 50m;
-
-  location / {
-    proxy_pass http://openclaw_gateway;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_read_timeout 300s;
-    proxy_send_timeout 300s;
-    proxy_buffering off;
-  }
-}
-NGINX
-
-ln -sf /etc/nginx/sites-available/openclaw /etc/nginx/sites-enabled/openclaw
-rm -f /etc/nginx/sites-enabled/default
-nginx -t
-systemctl reload nginx
-systemctl enable nginx
-
 # Firewall
 ufw allow OpenSSH
-ufw allow 80/tcp
+ufw allow 41641/udp || true
 ufw --force enable
 
 echo "bootstrap complete"
 `;
 }
-

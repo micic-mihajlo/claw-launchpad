@@ -13,17 +13,44 @@ export type HetznerProvisionParams = {
   image: string;
   location: string;
   sshPublicKeyPath: string;
+  tailscaleAuthKey: string;
+  tailscaleHostname?: string;
   minimaxApiKey?: string;
   anthropicApiKey?: string;
   openaiApiKey?: string;
   authChoice: "skip" | "minimax-api" | "anthropic-api-key" | "openai-api-key";
   discordBotToken?: string;
   discordGroupPolicy?: "open" | "allowlist" | "disabled";
+  discordGuildId?: string;
+  discordChannelIds?: string[];
 };
 
 function expandHome(p: string): string {
   if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
   return p;
+}
+
+function shellEscape(value: string): string {
+  // Safe for passing arbitrary bytes through a remote shell. Prevents expansions like $(), ``, $VAR, etc.
+  return `'${String(value).replace(/'/g, `'"'"'`)}'`;
+}
+
+function toRfc1123Label(value: string): string {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+
+  const sliced = normalized.slice(0, 63).replace(/-+$/, "");
+  const candidate = sliced || "openclaw";
+
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(candidate)) {
+    return "openclaw";
+  }
+  return candidate;
 }
 
 async function waitForSsh(ip: string, opts?: { timeoutMs?: number }) {
@@ -49,6 +76,25 @@ async function waitForSsh(ip: string, opts?: { timeoutMs?: number }) {
 
 export async function provisionHetzner(params: HetznerProvisionParams) {
   const client = new HetznerClient(params.apiToken);
+
+  if (!params.tailscaleAuthKey) {
+    throw new Error("tailscaleAuthKey is required (use an ephemeral auth key)");
+  }
+
+  const tailscaleHostname = toRfc1123Label(params.tailscaleHostname ?? params.name);
+
+  // Validate billable inputs up-front (before creating any cloud resources).
+  const effectiveDiscordGroupPolicy =
+    params.discordGroupPolicy ?? (params.discordBotToken ? "allowlist" : "disabled");
+  if (params.discordBotToken && effectiveDiscordGroupPolicy === "allowlist") {
+    if (!params.discordGuildId) {
+      throw new Error("discordGuildId is required when discordGroupPolicy=allowlist");
+    }
+    const channels = Array.isArray(params.discordChannelIds) ? params.discordChannelIds : [];
+    if (channels.length === 0) {
+      throw new Error("discordChannelIds is required when discordGroupPolicy=allowlist");
+    }
+  }
 
   const pubPath = expandHome(params.sshPublicKeyPath);
   const pub = fs.readFileSync(pubPath, "utf8").trim();
@@ -91,12 +137,15 @@ export async function provisionHetzner(params: HetznerProvisionParams) {
     gatewayPort: 18789,
     gatewayBind: "loopback",
     gatewayToken,
+    tailscaleMode: "serve",
     authChoice: params.authChoice,
     minimaxApiKey: params.minimaxApiKey,
     anthropicApiKey: params.anthropicApiKey,
     openaiApiKey: params.openaiApiKey,
     discordBotToken: params.discordBotToken,
-    discordGroupPolicy: params.discordGroupPolicy,
+    discordGroupPolicy: effectiveDiscordGroupPolicy as any,
+    discordGuildId: params.discordGuildId,
+    discordChannelIds: params.discordChannelIds,
   });
 
   const tmp = path.join(os.tmpdir(), `clawpad-bootstrap-${Date.now()}.sh`);
@@ -119,9 +168,11 @@ export async function provisionHetzner(params: HetznerProvisionParams) {
   if (params.anthropicApiKey) env.ANTHROPIC_API_KEY = params.anthropicApiKey;
   if (params.openaiApiKey) env.OPENAI_API_KEY = params.openaiApiKey;
   if (params.discordBotToken) env.DISCORD_BOT_TOKEN = params.discordBotToken;
+  env.TAILSCALE_AUTH_KEY = params.tailscaleAuthKey;
+  env.TAILSCALE_HOSTNAME = tailscaleHostname;
 
   const exportPrefix = Object.entries(env)
-    .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+    .map(([k, v]) => `${k}=${shellEscape(v)}`)
     .join(" ");
 
   await runOrThrow([
@@ -132,6 +183,36 @@ export async function provisionHetzner(params: HetznerProvisionParams) {
     `${exportPrefix} bash /root/clawpad-bootstrap.sh`,
   ]);
 
+  const tailnetUrl = await (async () => {
+    // Best-effort: if we can't detect it, users can still reach the gateway over Tailscale.
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const res = await run([
+        "ssh",
+        "-o",
+        "StrictHostKeyChecking=no",
+        `root@${ip}`,
+        "tailscale status --json",
+      ]);
+      if (res.code !== 0) {
+        await new Promise((r) => setTimeout(r, 2500));
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(res.stdout) as any;
+        const self = parsed?.Self;
+        const dns = typeof self?.DNSName === "string" ? String(self.DNSName) : "";
+        const host = dns ? dns.replace(/\.$/, "") : Array.isArray(self?.TailscaleIPs) ? self.TailscaleIPs[0] : null;
+        if (host) {
+          return `https://${host}/`;
+        }
+      } catch {
+        // ignore and retry
+      }
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+    return null;
+  })();
+
   // Persist metadata locally.
   const stateDir = path.join(process.cwd(), ".clawpad");
   fs.mkdirSync(stateDir, { recursive: true });
@@ -141,6 +222,7 @@ export async function provisionHetzner(params: HetznerProvisionParams) {
     ip,
     name: params.name,
     gatewayToken,
+    tailnetUrl,
     createdAt: new Date().toISOString(),
   };
   fs.writeFileSync(path.join(stateDir, `server-${serverId}.json`), JSON.stringify(record, null, 2));
@@ -149,6 +231,6 @@ export async function provisionHetzner(params: HetznerProvisionParams) {
     serverId,
     ip,
     gatewayToken,
-    url: `http://${ip}/`,
+    url: tailnetUrl ?? `http://${ip}/`,
   };
 }
