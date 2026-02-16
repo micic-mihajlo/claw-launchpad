@@ -21,6 +21,16 @@ const snapshotArgs = {
   syncedAt: v.string(),
 };
 
+function isIncomingSnapshotStale(existingUpdatedAt: string, incomingUpdatedAt: string): boolean {
+  const existingTs = Date.parse(existingUpdatedAt);
+  const incomingTs = Date.parse(incomingUpdatedAt);
+  if (Number.isFinite(existingTs) && Number.isFinite(incomingTs)) {
+    return incomingTs < existingTs;
+  }
+  // Fallback for malformed timestamps: ISO-8601 UTC strings still compare correctly lexicographically.
+  return incomingUpdatedAt < existingUpdatedAt;
+}
+
 export const upsertDeploymentSnapshot = mutationGeneric({
   args: snapshotArgs,
   handler: async (ctx, args) => {
@@ -30,6 +40,9 @@ export const upsertDeploymentSnapshot = mutationGeneric({
       .first();
 
     if (existing) {
+      if (isIncomingSnapshotStale(existing.updatedAt, args.updatedAt)) {
+        return { operation: "skipped_stale", id: existing._id };
+      }
       await ctx.db.patch(existing._id, args);
       return { operation: "updated", id: existing._id };
     }
