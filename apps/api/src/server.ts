@@ -2,8 +2,36 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { z } from "zod";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { SecretBox } from "./lib/crypto.js";
+import {
+  AuthChoice,
+  DeploymentConfig,
+  DeploymentSecrets,
+  DeploymentsStore,
+} from "./lib/deployments-store.js";
+import { DeploymentsWorker } from "./lib/deployments-worker.js";
 
 const DISCORD_BASE_URL = "https://discord.com/api/v10";
+
+function toRfc1123Label(value: string): string {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+
+  const sliced = normalized.slice(0, 63).replace(/-+$/, "");
+  const candidate = sliced || "openclaw";
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(candidate)) {
+    throw new Error("Invalid DNS label");
+  }
+  return candidate;
+}
 
 function jsonError(c: any, status: number, message: string, details?: unknown) {
   return c.json(
@@ -40,7 +68,63 @@ async function discordRequest<T>(token: string, path: string): Promise<{ ok: tru
   return { ok: true, data: data as T };
 }
 
+const deploymentsDbPath =
+  process.env.DEPLOYMENTS_DB_PATH || path.join(process.cwd(), ".clawpad", "deployments.db");
+const deploymentKey = process.env.DEPLOYMENTS_ENCRYPTION_KEY || "";
+const workerEnabled = process.env.DEPLOY_WORKER_ENABLED !== "false";
+const workerIntervalMs = Number.parseInt(process.env.DEPLOY_WORKER_INTERVAL_MS || "2500", 10);
+const workerLeaseMs = Number.parseInt(process.env.DEPLOY_WORKER_LEASE_MS || "45000", 10);
+const provisionerSshPublicKeyPath = process.env.PROVISIONER_SSH_PUBLIC_KEY_PATH || "";
+const provisionerSshPrivateKeyPath = process.env.PROVISIONER_SSH_PRIVATE_KEY_PATH || "";
+
+const deploymentsStore = new DeploymentsStore(deploymentsDbPath);
+let secretBox: SecretBox | null = null;
+const controlPlaneIssues: string[] = [];
+if (!deploymentKey) {
+  controlPlaneIssues.push("DEPLOYMENTS_ENCRYPTION_KEY missing");
+} else {
+  try {
+    secretBox = new SecretBox(deploymentKey);
+  } catch (error) {
+    controlPlaneIssues.push(error instanceof Error ? error.message : String(error));
+  }
+}
+
+let provisionerKeyReady = false;
+if (!provisionerSshPublicKeyPath) {
+  controlPlaneIssues.push("PROVISIONER_SSH_PUBLIC_KEY_PATH missing");
+} else {
+  const resolved = path.resolve(provisionerSshPublicKeyPath);
+  if (!fs.existsSync(resolved)) {
+    controlPlaneIssues.push(`PROVISIONER_SSH_PUBLIC_KEY_PATH does not exist: ${resolved}`);
+  } else {
+    provisionerKeyReady = true;
+  }
+}
+
+let deploymentsWorker: DeploymentsWorker | null = null;
+if (workerEnabled && secretBox && provisionerKeyReady) {
+  deploymentsWorker = new DeploymentsWorker({
+    store: deploymentsStore,
+    secretBox,
+    leaseMs: workerLeaseMs,
+    intervalMs: workerIntervalMs,
+    provisionConfig: {
+      sshPublicKeyPath: provisionerSshPublicKeyPath,
+      sshPrivateKeyPath: provisionerSshPrivateKeyPath || undefined,
+    },
+  });
+  deploymentsWorker.start();
+}
+
 const app = new Hono();
+
+app.onError((error, c) => {
+  console.error("Unhandled API error", error);
+  return jsonError(c, 500, "Internal server error");
+});
+
+app.notFound((c) => jsonError(c, 404, "Not found"));
 
 app.use(
   "*",
@@ -53,6 +137,16 @@ app.use(
 );
 
 app.get("/health", (c) => c.json({ ok: true }));
+
+app.get("/v1/control-plane/health", (c) => {
+  return c.json({
+    ok: true,
+    controlPlaneReady: controlPlaneIssues.length === 0,
+    workerEnabled,
+    workerRunning: Boolean(deploymentsWorker),
+    issues: controlPlaneIssues,
+  });
+});
 
 app.post("/v1/connectors/discord/test", async (c) => {
   const body = await c.req.json().catch(() => null);
@@ -132,5 +226,187 @@ app.post("/v1/connectors/discord/guild-channels", async (c) => {
   return c.json({ ok: true, channels: normalized });
 });
 
+const deploymentCreateSchema = z.object({
+  provider: z.literal("hetzner").default("hetzner"),
+  name: z.string().min(1),
+  serverType: z.string().min(1).default("cx23"),
+  image: z.string().min(1).default("ubuntu-24.04"),
+  location: z.string().min(1).default("nbg1"),
+  hetznerApiToken: z.string().min(1),
+  tailscaleAuthKey: z.string().min(1),
+  tailscaleHostname: z.string().min(1).optional(),
+  authChoice: z
+    .enum(["skip", "minimax-api", "anthropic-api-key", "openai-api-key"] satisfies [AuthChoice, ...AuthChoice[]])
+    .default("skip"),
+  minimaxApiKey: z.string().min(1).optional(),
+  anthropicApiKey: z.string().min(1).optional(),
+  openaiApiKey: z.string().min(1).optional(),
+  discordBotToken: z.string().min(1).optional(),
+  discordGroupPolicy: z.enum(["open", "allowlist", "disabled"]).default("allowlist"),
+  discordGuildId: z.string().regex(/^\d+$/).optional(),
+  discordChannelIds: z.array(z.string().regex(/^\d+$/)).optional(),
+  billingRef: z.string().max(128).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+app.post("/v1/deployments", async (c) => {
+  if (!secretBox) {
+    return jsonError(c, 503, "Control plane not configured", controlPlaneIssues);
+  }
+
+  const body = await c.req.json().catch(() => null);
+  const parsed = deploymentCreateSchema.safeParse(body);
+  if (!parsed.success) {
+    return jsonError(c, 400, "Invalid body", parsed.error.flatten());
+  }
+
+  if (!provisionerKeyReady) {
+    return jsonError(
+      c,
+      503,
+      "Server missing PROVISIONER_SSH_PUBLIC_KEY_PATH; cannot create deployable jobs",
+      controlPlaneIssues,
+    );
+  }
+
+  const payload = parsed.data;
+  let normalizedName: string;
+  let normalizedTailscaleHostname: string | undefined;
+  try {
+    normalizedName = toRfc1123Label(payload.name);
+    normalizedTailscaleHostname = payload.tailscaleHostname
+      ? toRfc1123Label(payload.tailscaleHostname)
+      : undefined;
+  } catch {
+    return jsonError(
+      c,
+      400,
+      "Invalid name or tailscaleHostname. Use 1-63 chars: lowercase letters, digits, hyphen.",
+    );
+  }
+  const discordGroupPolicy = payload.discordBotToken ? payload.discordGroupPolicy : "disabled";
+  const discordChannelIds = Array.from(new Set((payload.discordChannelIds ?? []).map((id) => id.trim())));
+
+  if (payload.authChoice === "minimax-api" && !payload.minimaxApiKey) {
+    return jsonError(c, 400, "minimaxApiKey is required when authChoice=minimax-api");
+  }
+  if (payload.authChoice === "anthropic-api-key" && !payload.anthropicApiKey) {
+    return jsonError(c, 400, "anthropicApiKey is required when authChoice=anthropic-api-key");
+  }
+  if (payload.authChoice === "openai-api-key" && !payload.openaiApiKey) {
+    return jsonError(c, 400, "openaiApiKey is required when authChoice=openai-api-key");
+  }
+
+  if (payload.discordBotToken && discordGroupPolicy === "allowlist") {
+    if (!payload.discordGuildId) {
+      return jsonError(c, 400, "discordGuildId is required when discordGroupPolicy=allowlist");
+    }
+    if (discordChannelIds.length === 0) {
+      return jsonError(c, 400, "discordChannelIds is required when discordGroupPolicy=allowlist");
+    }
+  }
+
+  const deploymentId = crypto.randomUUID();
+  const config: DeploymentConfig = {
+    name: normalizedName,
+    serverType: payload.serverType,
+    image: payload.image,
+    location: payload.location,
+    tailscaleHostname: normalizedTailscaleHostname,
+    authChoice: payload.authChoice,
+    discordGroupPolicy,
+    discordGuildId: payload.discordGuildId,
+    discordChannelIds: payload.discordBotToken ? discordChannelIds : undefined,
+  };
+
+  const secrets: DeploymentSecrets = {
+    hetznerApiToken: payload.hetznerApiToken,
+    tailscaleAuthKey: payload.tailscaleAuthKey,
+    minimaxApiKey: payload.minimaxApiKey,
+    anthropicApiKey: payload.anthropicApiKey,
+    openaiApiKey: payload.openaiApiKey,
+    discordBotToken: payload.discordBotToken,
+  };
+
+  const deployment = deploymentsStore.createDeployment({
+    id: deploymentId,
+    provider: "hetzner",
+    name: normalizedName,
+    config,
+    secretsEncrypted: secretBox.encryptObject(secrets),
+    metadata: payload.metadata,
+    billingRef: payload.billingRef,
+  });
+
+  return c.json({
+    ok: true,
+    deployment,
+  });
+});
+
+app.get("/v1/deployments", (c) => {
+  const limit = Number.parseInt(String(c.req.query("limit") || "50"), 10);
+  const offset = Number.parseInt(String(c.req.query("offset") || "0"), 10);
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 200)) : 50;
+  const safeOffset = Number.isFinite(offset) ? Math.max(0, offset) : 0;
+  return c.json({
+    ok: true,
+    deployments: deploymentsStore.listPublic(safeLimit, safeOffset),
+  });
+});
+
+app.get("/v1/deployments/:id", (c) => {
+  const deployment = deploymentsStore.getPublic(c.req.param("id"));
+  if (!deployment) {
+    return jsonError(c, 404, "Deployment not found");
+  }
+  const events = deploymentsStore.listEvents(deployment.id, 200);
+  return c.json({
+    ok: true,
+    deployment,
+    events,
+  });
+});
+
+app.post("/v1/deployments/:id/cancel", async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const schema = z.object({
+    reason: z.string().max(256).optional(),
+  });
+  const parsed = schema.safeParse(body ?? {});
+  if (!parsed.success) {
+    return jsonError(c, 400, "Invalid body", parsed.error.flatten());
+  }
+
+  const deployment = deploymentsStore.requestCancel(c.req.param("id"), parsed.data.reason);
+  if (!deployment) {
+    return jsonError(c, 404, "Deployment not found");
+  }
+  return c.json({ ok: true, deployment });
+});
+
+app.post("/v1/deployments/:id/retry", (c) => {
+  const id = c.req.param("id");
+  try {
+    const deployment = deploymentsStore.retryDeployment(id);
+    if (!deployment) {
+      return jsonError(c, 404, "Deployment not found");
+    }
+    return c.json({ ok: true, deployment });
+  } catch (error) {
+    return jsonError(c, 409, error instanceof Error ? error.message : String(error));
+  }
+});
+
 const port = Number.parseInt(process.env.PORT || "8788", 10);
 serve({ fetch: app.fetch, port });
+
+process.on("SIGINT", () => {
+  deploymentsWorker?.stop();
+  deploymentsStore.close();
+});
+
+process.on("SIGTERM", () => {
+  deploymentsWorker?.stop();
+  deploymentsStore.close();
+});
