@@ -8,6 +8,13 @@ export type RunResult = {
 
 export async function run(argv: string[], opts?: { cwd?: string; env?: NodeJS.ProcessEnv }): Promise<RunResult> {
   return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (result: RunResult) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
     const child = spawn(argv[0], argv.slice(1), {
       stdio: ["ignore", "pipe", "pipe"],
       cwd: opts?.cwd,
@@ -21,8 +28,16 @@ export async function run(argv: string[], opts?: { cwd?: string; env?: NodeJS.Pr
     child.stdout.on("data", (chunk: string) => (stdout += chunk));
     child.stderr.on("data", (chunk: string) => (stderr += chunk));
 
+    child.on("error", (error) => {
+      finish({
+        code: 1,
+        stdout,
+        stderr: stderr || (error instanceof Error ? error.message : String(error)),
+      });
+    });
+
     child.on("close", (code: number | null) => {
-      resolve({ code: Number(code ?? 1), stdout, stderr });
+      finish({ code: Number(code ?? 1), stdout, stderr });
     });
   });
 }

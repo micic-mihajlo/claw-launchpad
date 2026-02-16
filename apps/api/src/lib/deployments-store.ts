@@ -464,7 +464,7 @@ export class DeploymentsStore {
     const tx = this.#db.transaction((rows: DeploymentRow[]) => {
       const updatedAt = nowIso();
       for (const row of rows) {
-        if (row.server_id || row.cancel_requested_at) {
+        if (row.server_id || row.ssh_key_id || row.cancel_requested_at) {
           this.#db
             .prepare(
               `
