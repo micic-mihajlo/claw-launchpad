@@ -28,6 +28,7 @@ Launchpad bakes a repeatable bootstrap that does:
 
 - MVP CLI: `clawpad hetzner:create` (Hetzner + Tailscale Serve + OpenClaw bootstrap)
 - Early web wizard: `apps/web` + `apps/api` (Discord connector modal with token test + allowlist builder)
+- Control-plane v1: SQLite-backed deployments + worker queue + automatic cleanup on failed/canceled provisioning
 
 ## Usage
 
@@ -62,7 +63,32 @@ npm run dev:api
 npm run dev:web
 ```
 
+## Deployments API (control plane)
+
+States:
+- `pending`
+- `provisioning`
+- `running`
+- `failed`
+- `canceled`
+
+Core endpoints:
+- `POST /v1/deployments` create a deployment request (queued in `pending`)
+- `GET /v1/deployments` list deployments
+- `GET /v1/deployments/:id` get deployment + event history
+- `POST /v1/deployments/:id/cancel` request cancel (worker performs cleanup)
+- `POST /v1/deployments/:id/retry` retry failed/canceled deployments (only when no resources remain attached)
+- `GET /v1/control-plane/health` config + worker readiness
+
+Required API env for worker mode:
+- `DEPLOYMENTS_ENCRYPTION_KEY` (encrypt secrets at rest)
+- `PROVISIONER_SSH_PUBLIC_KEY_PATH`
+- optionally `PROVISIONER_SSH_PRIVATE_KEY_PATH`
+
+See `apps/api/.env.example` for full list.
+
 ## Docs
 
 - `docs/PLATFORM.md` (what the proper platform should look like)
 - `docs/BYO.md` (bring-your-own hardware: what you sell)
+- `docs/CONTROL_PLANE.md` (deployment state machine + worker + cleanup behavior)
