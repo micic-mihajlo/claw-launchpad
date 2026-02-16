@@ -29,6 +29,7 @@ Launchpad bakes a repeatable bootstrap that does:
 - MVP CLI: `clawpad hetzner:create` (Hetzner + Tailscale Serve + OpenClaw bootstrap)
 - Early web wizard: `apps/web` + `apps/api` (Discord connector modal with token test + allowlist builder)
 - Control-plane v1: SQLite-backed deployments + worker queue + automatic cleanup on failed/canceled provisioning
+- Optional Convex mirror: deployment snapshots/events streamed for realtime app UX
 
 ## Usage
 
@@ -61,6 +62,9 @@ npm run dev:api
 
 # Web (defaults to :5173)
 npm run dev:web
+
+# Convex (optional realtime mirror/read-model)
+npm --workspace @clawpad/convex run dev
 ```
 
 ## Deployments API (control plane)
@@ -87,8 +91,15 @@ Required API env for worker mode:
 
 See `apps/api/.env.example` for full list.
 
+Optional Convex mirror env:
+- `CONVEX_SYNC_ENABLED=true`
+- `CONVEX_URL`
+- `CONVEX_DEPLOY_KEY`
+- `CONVEX_SYNC_TIMEOUT_MS`
+
 ## Docs
 
 - `docs/PLATFORM.md` (what the proper platform should look like)
 - `docs/BYO.md` (bring-your-own hardware: what you sell)
 - `docs/CONTROL_PLANE.md` (deployment state machine + worker + cleanup behavior)
+- `docs/CONVEX.md` (what Convex owns vs what worker still owns)

@@ -6,6 +6,9 @@ This API layer is built around three rules:
 2. Every transition is persisted and auditable.
 3. Failures and cancel requests trigger infrastructure cleanup to avoid orphan spend.
 
+Optional:
+- Convex can mirror deployments/events for realtime app reads, but SQLite remains source of truth for provisioning.
+
 ## Data Model
 
 `deployments`:
