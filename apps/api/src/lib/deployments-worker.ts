@@ -428,12 +428,17 @@ export class DeploymentsWorker {
         .join(" ");
 
       this.#store.appendEvent(job.id, "deployment.provision.progress", "Running bootstrap script");
-      await runOrThrow([
+      const bootstrapRes = await run([
         "ssh",
         ...sshOptions(this.#provisionConfig.sshPrivateKeyPath),
         `root@${ip}`,
         `${exportPrefix} bash /root/clawpad-bootstrap.sh`,
       ]);
+      if (bootstrapRes.code !== 0) {
+        throw new Error(
+          `bootstrap script failed (${bootstrapRes.code}): ${bootstrapRes.stderr || bootstrapRes.stdout}`,
+        );
+      }
 
       await this.#heartbeat(job.id);
       await this.#assertNotCanceled(job.id);

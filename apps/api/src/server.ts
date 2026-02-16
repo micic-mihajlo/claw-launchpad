@@ -120,8 +120,8 @@ if (workerEnabled && secretBox && provisionerKeyReady) {
 const app = new Hono();
 
 app.onError((error, c) => {
-  const message = error instanceof Error ? error.message : String(error);
-  return jsonError(c, 500, "Internal server error", { message });
+  console.error("Unhandled API error", error);
+  return jsonError(c, 500, "Internal server error");
 });
 
 app.notFound((c) => jsonError(c, 404, "Not found"));
