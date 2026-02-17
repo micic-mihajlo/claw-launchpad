@@ -51,7 +51,30 @@ On provisioning failure or cancel:
 - `GET /v1/deployments/:id`
 - `POST /v1/deployments/:id/cancel`
 - `POST /v1/deployments/:id/retry`
+- `GET /v1/billing/plans`
+- `POST /v1/billing/checkout`
+- `POST /v1/webhooks/stripe`
+- `GET /v1/orders`
+- `GET /v1/orders/:id`
+- `POST /v1/orders/:id/provision`
 - `GET /v1/control-plane/health`
+
+## Billing Order Flow
+
+`billing_orders` state model:
+- `pending_payment`
+- `paid`
+- `deployment_created`
+- `expired`
+- `failed`
+- `canceled`
+
+Flow:
+1. Create checkout (`POST /v1/billing/checkout`) with deployment payload + plan id.
+2. API persists encrypted deployment payload and creates Stripe session.
+3. Stripe webhook marks order paid (`checkout.session.completed`) with idempotent event processing.
+4. When auto-provision is on, paid order is immediately converted to a deployment row (`billing_ref = order_id`).
+5. Deployments worker handles provisioning lifecycle and cleanup as normal.
 
 ## Required Env
 
@@ -62,3 +85,6 @@ On provisioning failure or cancel:
 - `DEPLOY_WORKER_LEASE_MS`
 - `PROVISIONER_SSH_PUBLIC_KEY_PATH`
 - `PROVISIONER_SSH_PRIVATE_KEY_PATH` (optional)
+- `BILLING_DB_PATH`
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`

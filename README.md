@@ -29,6 +29,7 @@ Launchpad bakes a repeatable bootstrap that does:
 - MVP CLI: `clawpad hetzner:create` (Hetzner + Tailscale Serve + OpenClaw bootstrap)
 - Early web wizard: `apps/web` + `apps/api` (Discord connector modal with token test + allowlist builder)
 - Control-plane v1: SQLite-backed deployments + worker queue + automatic cleanup on failed/canceled provisioning
+- Billing v1: Stripe Checkout orders with webhook idempotency + paid-order to deployment queue handoff
 - Optional Convex mirror: deployment snapshots/events streamed for realtime app UX
 
 ## Usage
@@ -82,12 +83,24 @@ Core endpoints:
 - `GET /v1/deployments/:id` get deployment + event history
 - `POST /v1/deployments/:id/cancel` request cancel (worker performs cleanup)
 - `POST /v1/deployments/:id/retry` retry failed/canceled deployments (only when no resources remain attached)
+- `GET /v1/billing/plans` list sellable plans configured for checkout
+- `POST /v1/billing/checkout` create Stripe checkout session + pending order
+- `POST /v1/webhooks/stripe` Stripe webhook endpoint (signature-verified + idempotent)
+- `GET /v1/orders` list billing orders
+- `GET /v1/orders/:id` get billing order + event history
+- `POST /v1/orders/:id/provision` manual paid-order provisioning trigger
 - `GET /v1/control-plane/health` config + worker readiness
 
 Required API env for worker mode:
 - `DEPLOYMENTS_ENCRYPTION_KEY` (encrypt secrets at rest)
 - `PROVISIONER_SSH_PUBLIC_KEY_PATH`
 - optionally `PROVISIONER_SSH_PRIVATE_KEY_PATH`
+
+Required API env for Stripe billing:
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+- `BILLING_AUTO_PROVISION_ON_PAYMENT` (default `true`)
+- optionally `STRIPE_CHECKOUT_SUCCESS_URL` and `STRIPE_CHECKOUT_CANCEL_URL` as defaults
 
 See `apps/api/.env.example` for full list.
 
