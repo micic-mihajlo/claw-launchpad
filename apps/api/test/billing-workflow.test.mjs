@@ -64,6 +64,22 @@ function signStripePayload(payload, secret) {
   });
 }
 
+async function postStripeWebhook(baseUrl, type, session, stripeWebhookSecret) {
+  const payload = makeStripeWebhookPayload(type, session);
+  const response = await fetch(`${baseUrl}/v1/webhooks/stripe`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "stripe-signature": signStripePayload(payload, stripeWebhookSecret),
+    },
+    body: payload,
+  });
+  return {
+    payload,
+    response,
+  };
+}
+
 async function waitForServerReady(baseUrl, child, timeoutMs = 10_000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
@@ -283,6 +299,83 @@ test("checkout.session.completed with unpaid status stays pending until async su
   assert.equal(deployments.length, 0);
 });
 
+test("checkout.session.async_payment_failed can retry and still succeed later", async (t) => {
+  const ctx = await createContext(t);
+  const store = ctx.openBillingStore();
+
+  const order = store.createOrder({
+    id: crypto.randomUUID(),
+    provider: "stripe",
+    planId: "hetzner-cx23-launch",
+    amountCents: 4900,
+    currency: "usd",
+    deploymentInputEncrypted: createEncryptedDeploymentInput(ctx.deploymentKey),
+  });
+
+  const checkoutSessionId = `cs_test_${crypto.randomUUID().replaceAll("-", "")}`;
+  store.setCheckoutSession(order.id, {
+    checkoutSessionId,
+    checkoutUrl: null,
+  });
+  store.close();
+
+  const failedPayload = {
+    id: checkoutSessionId,
+    object: "checkout.session",
+    client_reference_id: order.id,
+    metadata: { order_id: order.id },
+    payment_status: "failed",
+    payment_intent: `pi_${crypto.randomUUID().replaceAll("-", "")}`,
+    customer: `cus_${crypto.randomUUID().replaceAll("-", "")}`,
+    customer_email: "retry@example.com",
+    customer_details: { email: "retry@example.com" },
+    url: `https://checkout.stripe.com/pay/${checkoutSessionId}`,
+  };
+
+  const { response: failedResponse } = await postStripeWebhook(
+    ctx.baseUrl,
+    "checkout.session.async_payment_failed",
+    failedPayload,
+    ctx.stripeWebhookSecret,
+  );
+  assert.equal(failedResponse.status, 200);
+  const failedBody = await failedResponse.json();
+  assert.equal(failedBody.order.status, "failed");
+
+  const failedOrder = await ctx.getOrder(order.id);
+  assert.equal(failedOrder.status, "failed");
+  const deploymentsAfterFailure = await ctx.getDeployments();
+  assert.equal(deploymentsAfterFailure.length, 0);
+
+  const succeededPayload = {
+    id: checkoutSessionId,
+    object: "checkout.session",
+    client_reference_id: order.id,
+    metadata: { order_id: order.id },
+    payment_status: "paid",
+    payment_intent: `pi_${crypto.randomUUID().replaceAll("-", "")}`,
+    customer: `cus_${crypto.randomUUID().replaceAll("-", "")}`,
+    customer_email: "retry@example.com",
+    customer_details: { email: "retry@example.com" },
+    url: `https://checkout.stripe.com/pay/${checkoutSessionId}`,
+  };
+
+  const { response: succeededResponse } = await postStripeWebhook(
+    ctx.baseUrl,
+    "checkout.session.async_payment_succeeded",
+    succeededPayload,
+    ctx.stripeWebhookSecret,
+  );
+  assert.equal(succeededResponse.status, 200);
+  assert.equal((await succeededResponse.json()).order.status, "deployment_created");
+
+  const orderAfter = await ctx.getOrder(order.id);
+  assert.equal(orderAfter.status, "deployment_created");
+  const deploymentsAfterSuccess = await ctx.getDeployments();
+  assert.equal(deploymentsAfterSuccess.length, 1);
+  assert.equal(deploymentsAfterSuccess[0].billingRef, order.id);
+});
+
 test("checkout.session.async_payment_succeeded marks paid and queues deployment", async (t) => {
   const ctx = await createContext(t);
   const store = ctx.openBillingStore();
@@ -334,6 +427,55 @@ test("checkout.session.async_payment_succeeded marks paid and queues deployment"
   const deployments = await ctx.getDeployments();
   assert.equal(deployments.length, 1);
   assert.equal(deployments[0].billingRef, order.id);
+});
+
+test("deployment_created orders stay deployment_created even when failed is reported", async (t) => {
+  const tmpRoot = await mkdtemp(path.join(tmpdir(), "clawpad-billing-store-"));
+  const billingDbPath = path.join(tmpRoot, "billing.db");
+  const deploymentKey = "test-deployment-encryption-key";
+  const store = new BillingStore(billingDbPath);
+  const box = new SecretBox(deploymentKey);
+
+  t.after(async () => {
+    store.close();
+    await rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  const order = store.createOrder({
+    id: crypto.randomUUID(),
+    provider: "stripe",
+    planId: "hetzner-cx23-launch",
+    amountCents: 4900,
+    currency: "usd",
+    deploymentInputEncrypted: box.encryptObject({
+      name: "store-guard",
+      hetznerApiToken: "hetzner-token-placeholder",
+      tailscaleAuthKey: "tailscale-auth-key",
+    }),
+  });
+
+  const checkoutSessionId = `cs_test_${crypto.randomUUID().replaceAll("-", "")}`;
+  store.setCheckoutSession(order.id, {
+    checkoutSessionId,
+    checkoutUrl: null,
+  });
+  store.markOrderPaid(order.id, {
+    stripeCheckoutSessionId: checkoutSessionId,
+    customerEmail: "guard@example.com",
+  });
+  const deploymentCreated = store.markOrderDeploymentCreated(order.id, `dep-${crypto.randomUUID().slice(0, 8)}`);
+  assert.equal(deploymentCreated?.status, "deployment_created");
+
+  const beforeFailed = store.getOrder(order.id);
+  assert.equal(beforeFailed?.status, "deployment_created");
+  assert.equal(beforeFailed?.errorMessage, null);
+  const afterFailed = store.markOrderFailed(order.id, "provider network error");
+
+  assert.equal(afterFailed?.status, "deployment_created");
+  assert.equal(afterFailed?.errorMessage, null);
+  const finalOrder = store.getOrder(order.id);
+  assert.equal(finalOrder?.status, "deployment_created");
+  assert.equal(finalOrder?.errorMessage, null);
 });
 
 test("manual order provisioning is idempotent and never creates duplicate deployments", async (t) => {
