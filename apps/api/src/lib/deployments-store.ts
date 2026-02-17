@@ -94,6 +94,11 @@ export type DeploymentInternal = DeploymentPublic & {
   leaseExpiresAt: number | null;
 };
 
+export type DeploymentsStoreHooks = {
+  onDeploymentChanged?: (deployment: DeploymentPublic) => void | Promise<void>;
+  onEventAppended?: (event: DeploymentEvent) => void | Promise<void>;
+};
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -113,13 +118,15 @@ function hasOwn(o: object, key: string): boolean {
 
 export class DeploymentsStore {
   readonly #db: Database.Database;
+  readonly #hooks: DeploymentsStoreHooks;
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, hooks: DeploymentsStoreHooks = {}) {
     const absolutePath = path.resolve(dbPath);
     fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
     this.#db = new Database(absolutePath);
     this.#db.pragma("journal_mode = WAL");
     this.#db.pragma("foreign_keys = ON");
+    this.#hooks = hooks;
     this.#init();
   }
 
@@ -169,6 +176,59 @@ export class DeploymentsStore {
 
   close() {
     this.#db.close();
+  }
+
+  #notifyDeploymentChanged(deployment: DeploymentPublic) {
+    if (!this.#hooks.onDeploymentChanged) return;
+    void Promise.resolve(this.#hooks.onDeploymentChanged(deployment)).catch((error) => {
+      console.error("DeploymentsStore onDeploymentChanged hook failed", error);
+    });
+  }
+
+  #notifyDeploymentChangedById(deploymentId: string) {
+    const deployment = this.getPublic(deploymentId);
+    if (!deployment) return;
+    this.#notifyDeploymentChanged(deployment);
+  }
+
+  #notifyEventAppended(event: DeploymentEvent) {
+    if (!this.#hooks.onEventAppended) return;
+    void Promise.resolve(this.#hooks.onEventAppended(event)).catch((error) => {
+      console.error("DeploymentsStore onEventAppended hook failed", error);
+    });
+  }
+
+  #insertEvent(
+    deploymentId: string,
+    type: string,
+    message: string,
+    payload?: Record<string, unknown>,
+    createdAt = nowIso(),
+  ): DeploymentEvent {
+    const result = this.#db
+      .prepare(
+        `
+      INSERT INTO deployment_events (
+        deployment_id, type, message, payload_json, created_at
+      ) VALUES (?, ?, ?, ?, ?)
+    `,
+      )
+      .run(
+        deploymentId,
+        type,
+        message,
+        payload ? JSON.stringify(payload) : null,
+        createdAt,
+      );
+
+    return {
+      id: Number(result.lastInsertRowid),
+      deploymentId,
+      type,
+      message,
+      payload: payload ?? {},
+      createdAt,
+    };
   }
 
   #toPublic(row: DeploymentRow): DeploymentPublic {
@@ -280,22 +340,15 @@ export class DeploymentsStore {
     }));
   }
 
-  appendEvent(deploymentId: string, type: string, message: string, payload?: Record<string, unknown>) {
-    this.#db
-      .prepare(
-        `
-      INSERT INTO deployment_events (
-        deployment_id, type, message, payload_json, created_at
-      ) VALUES (?, ?, ?, ?, ?)
-    `,
-      )
-      .run(
-        deploymentId,
-        type,
-        message,
-        payload ? JSON.stringify(payload) : null,
-        nowIso(),
-      );
+  appendEvent(
+    deploymentId: string,
+    type: string,
+    message: string,
+    payload?: Record<string, unknown>,
+  ): DeploymentEvent {
+    const event = this.#insertEvent(deploymentId, type, message, payload);
+    this.#notifyEventAppended(event);
+    return event;
   }
 
   createDeployment(input: {
@@ -338,6 +391,7 @@ export class DeploymentsStore {
     if (!created) {
       throw new Error("Failed to read deployment after create");
     }
+    this.#notifyDeploymentChanged(created);
     return created;
   }
 
@@ -377,7 +431,9 @@ export class DeploymentsStore {
         this.appendEvent(id, "deployment.canceled", "Deployment canceled before provisioning started", {
           reason: reason ?? "cancel requested",
         });
-        return this.#toPublic(row);
+        const deployment = this.#toPublic(row);
+        this.#notifyDeploymentChanged(deployment);
+        return deployment;
       }
       return this.getPublic(id);
     }
@@ -402,7 +458,9 @@ export class DeploymentsStore {
       status: row.status,
       reason: reason ?? "cancel requested",
     });
-    return this.#toPublic(row);
+    const deployment = this.#toPublic(row);
+    this.#notifyDeploymentChanged(deployment);
+    return deployment;
   }
 
   retryDeployment(id: string): DeploymentPublic | null {
@@ -442,7 +500,9 @@ export class DeploymentsStore {
     }
 
     this.appendEvent(id, "deployment.retried", "Deployment moved back to pending");
-    return this.#toPublic(row);
+    const deployment = this.#toPublic(row);
+    this.#notifyDeploymentChanged(deployment);
+    return deployment;
   }
 
   recoverExpiredProvisionLeases(nowMs = Date.now()) {
@@ -461,6 +521,7 @@ export class DeploymentsStore {
 
     if (staleRows.length === 0) return;
 
+    const pendingEventNotifications: DeploymentEvent[] = [];
     const tx = this.#db.transaction((rows: DeploymentRow[]) => {
       const updatedAt = nowIso();
       for (const row of rows) {
@@ -483,10 +544,14 @@ export class DeploymentsStore {
               "Worker lease expired during provisioning; scheduling cleanup",
               row.id,
             );
-          this.appendEvent(
-            row.id,
-            "deployment.recovered.destroy_queued",
-            "Worker lease expired; queued cleanup to avoid orphaned resources",
+          pendingEventNotifications.push(
+            this.#insertEvent(
+              row.id,
+              "deployment.recovered.destroy_queued",
+              "Worker lease expired; queued cleanup to avoid orphaned resources",
+              undefined,
+              updatedAt,
+            ),
           );
         } else {
           this.#db
@@ -510,15 +575,25 @@ export class DeploymentsStore {
               "Worker lease expired before resources were attached",
               row.id,
             );
-          this.appendEvent(
-            row.id,
-            "deployment.failed",
-            "Worker lease expired before provisioning completed",
+          pendingEventNotifications.push(
+            this.#insertEvent(
+              row.id,
+              "deployment.failed",
+              "Worker lease expired before provisioning completed",
+              undefined,
+              updatedAt,
+            ),
           );
         }
       }
     });
     tx(staleRows);
+    for (const event of pendingEventNotifications) {
+      this.#notifyEventAppended(event);
+    }
+    for (const row of staleRows) {
+      this.#notifyDeploymentChangedById(row.id);
+    }
   }
 
   leaseNextDestroyJob(workerId: string, leaseMs: number): DeploymentInternal | null {
@@ -558,7 +633,9 @@ export class DeploymentsStore {
         workerId,
       });
     }
-    return this.#toInternal(row);
+    const deployment = this.#toInternal(row);
+    this.#notifyDeploymentChanged(deployment);
+    return deployment;
   }
 
   leaseNextProvisionJob(workerId: string, leaseMs: number): DeploymentInternal | null {
@@ -589,7 +666,9 @@ export class DeploymentsStore {
     this.appendEvent(row.id, "deployment.provision.started", "Provisioning job leased by worker", {
       workerId,
     });
-    return this.#toInternal(row);
+    const deployment = this.#toInternal(row);
+    this.#notifyDeploymentChanged(deployment);
+    return deployment;
   }
 
   renewLease(id: string, workerId: string, leaseMs: number): boolean {
@@ -687,7 +766,9 @@ export class DeploymentsStore {
       ) as DeploymentRow | undefined;
 
     if (!row) return null;
-    return this.#toInternal(row);
+    const deployment = this.#toInternal(row);
+    this.#notifyDeploymentChanged(deployment);
+    return deployment;
   }
 
   markRunning(
@@ -745,7 +826,9 @@ export class DeploymentsStore {
       serverIp: payload.serverIp,
       tailnetUrl: payload.tailnetUrl,
     });
-    return this.#toPublic(row);
+    const deployment = this.#toPublic(row);
+    this.#notifyDeploymentChanged(deployment);
+    return deployment;
   }
 
   markCanceledFromProvisioning(id: string, workerId: string): DeploymentPublic | null {
@@ -778,7 +861,9 @@ export class DeploymentsStore {
       .get(updatedAt, updatedAt, id, workerId) as DeploymentRow | undefined;
     if (!row) return null;
     this.appendEvent(id, "deployment.canceled", "Provisioning canceled and resources cleaned up");
-    return this.#toPublic(row);
+    const deployment = this.#toPublic(row);
+    this.#notifyDeploymentChanged(deployment);
+    return deployment;
   }
 
   markCanceledFromDestroy(id: string, workerId: string): DeploymentPublic | null {
@@ -811,7 +896,9 @@ export class DeploymentsStore {
       .get(updatedAt, updatedAt, id, workerId) as DeploymentRow | undefined;
     if (!row) return null;
     this.appendEvent(id, "deployment.canceled", "Cleanup completed; deployment canceled");
-    return this.#toPublic(row);
+    const deployment = this.#toPublic(row);
+    this.#notifyDeploymentChanged(deployment);
+    return deployment;
   }
 
   markFailed(id: string, workerId: string, errorMessage: string): DeploymentPublic | null {
@@ -839,6 +926,8 @@ export class DeploymentsStore {
     this.appendEvent(id, "deployment.failed", "Deployment failed", {
       error: errorMessage,
     });
-    return this.#toPublic(row);
+    const deployment = this.#toPublic(row);
+    this.#notifyDeploymentChanged(deployment);
+    return deployment;
   }
 }

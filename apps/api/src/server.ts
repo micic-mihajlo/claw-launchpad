@@ -13,6 +13,7 @@ import {
   DeploymentsStore,
 } from "./lib/deployments-store.js";
 import { DeploymentsWorker } from "./lib/deployments-worker.js";
+import { ConvexMirrorClient } from "./lib/convex-mirror.js";
 
 const DISCORD_BASE_URL = "https://discord.com/api/v10";
 
@@ -76,8 +77,27 @@ const workerIntervalMs = Number.parseInt(process.env.DEPLOY_WORKER_INTERVAL_MS |
 const workerLeaseMs = Number.parseInt(process.env.DEPLOY_WORKER_LEASE_MS || "45000", 10);
 const provisionerSshPublicKeyPath = process.env.PROVISIONER_SSH_PUBLIC_KEY_PATH || "";
 const provisionerSshPrivateKeyPath = process.env.PROVISIONER_SSH_PRIVATE_KEY_PATH || "";
+const convexSyncEnabled = process.env.CONVEX_SYNC_ENABLED === "true";
+const convexSyncTimeoutMs = Number.parseInt(process.env.CONVEX_SYNC_TIMEOUT_MS || "8000", 10);
+const convexUrl = process.env.CONVEX_URL || "";
+const convexDeployKey = process.env.CONVEX_DEPLOY_KEY || "";
 
-const deploymentsStore = new DeploymentsStore(deploymentsDbPath);
+const convexMirror = new ConvexMirrorClient({
+  enabled: convexSyncEnabled,
+  url: convexUrl,
+  deployKey: convexDeployKey,
+  timeoutMs: convexSyncTimeoutMs,
+});
+
+const deploymentsStore = new DeploymentsStore(deploymentsDbPath, {
+  onDeploymentChanged: async (deployment) => {
+    await convexMirror.syncDeploymentSnapshot(deployment);
+  },
+  onEventAppended: async (event) => {
+    await convexMirror.appendDeploymentEvent(event);
+  },
+});
+
 let secretBox: SecretBox | null = null;
 const controlPlaneIssues: string[] = [];
 if (!deploymentKey) {
@@ -145,6 +165,11 @@ app.get("/v1/control-plane/health", (c) => {
     workerEnabled,
     workerRunning: Boolean(deploymentsWorker),
     issues: controlPlaneIssues,
+    convexSync: {
+      enabled: convexMirror.enabled,
+      ready: convexMirror.ready,
+      issues: convexMirror.issues,
+    },
   });
 });
 

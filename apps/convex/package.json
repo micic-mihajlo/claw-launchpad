@@ -1,0 +1,18 @@
+{
+  "name": "@clawpad/convex",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Convex read-model and realtime app layer for claw-launchpad.",
+  "scripts": {
+    "dev": "convex dev",
+    "deploy": "convex deploy",
+    "check": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "convex": "^1.31.7"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
