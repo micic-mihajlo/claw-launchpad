@@ -170,6 +170,10 @@ export class DeploymentsStore {
       CREATE INDEX IF NOT EXISTS idx_deployments_status ON deployments(status, active_task, created_at);
       CREATE INDEX IF NOT EXISTS idx_deployments_cancel ON deployments(cancel_requested_at);
       CREATE INDEX IF NOT EXISTS idx_deployments_lease ON deployments(lease_expires_at);
+      CREATE INDEX IF NOT EXISTS idx_deployments_billing_ref ON deployments(billing_ref);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_deployments_billing_ref_unique
+      ON deployments(billing_ref)
+      WHERE billing_ref IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_deployment_events_deployment ON deployment_events(deployment_id, id DESC);
     `);
   }
@@ -294,6 +298,21 @@ export class DeploymentsStore {
 
   getPublic(id: string): DeploymentPublic | null {
     const row = this.#getRow(id);
+    if (!row) return null;
+    return this.#toPublic(row);
+  }
+
+  getPublicByBillingRef(billingRef: string): DeploymentPublic | null {
+    const row = this.#db
+      .prepare(
+        `
+      SELECT * FROM deployments
+      WHERE billing_ref = ?
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+      )
+      .get(billingRef) as DeploymentRow | undefined;
     if (!row) return null;
     return this.#toPublic(row);
   }
