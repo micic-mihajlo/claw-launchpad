@@ -639,6 +639,41 @@ async function handlePaidCheckoutSession(
     };
   }
 
+  const paymentStatus = String(session.payment_status || "").trim().toLowerCase();
+  const shouldWaitForAsyncSettlement =
+    trigger === "stripe.checkout.session.completed" &&
+    paymentStatus !== "paid" &&
+    paymentStatus !== "no_payment_required";
+
+  if (shouldWaitForAsyncSettlement) {
+    billingStore.setCheckoutSession(targetOrderId, {
+      checkoutSessionId: String(session.id || ""),
+      checkoutUrl: session.url ?? null,
+    });
+
+    const pendingOrder = billingStore.getOrder(targetOrderId);
+    if (pendingOrder?.status === "pending_payment") {
+      billingStore.appendOrderEvent(
+        targetOrderId,
+        "order.payment.pending_async",
+        "Checkout completed but payment is not yet settled; waiting for async payment success",
+        {
+          trigger,
+          paymentStatus,
+          checkoutSessionId: String(session.id || ""),
+        },
+      );
+    }
+
+    return {
+      ignored: false,
+      pendingAsyncPayment: true,
+      paymentStatus,
+      order: pendingOrder ?? orderBySession ?? null,
+      checkoutSessionId: session.id,
+    };
+  }
+
   const paid = billingStore.markOrderPaid(targetOrderId, {
     stripeCheckoutSessionId: String(session.id || ""),
     stripePaymentIntentId: asStringId(session.payment_intent as string | { id?: string } | null | undefined),
