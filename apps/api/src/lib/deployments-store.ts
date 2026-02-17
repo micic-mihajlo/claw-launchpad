@@ -198,6 +198,39 @@ export class DeploymentsStore {
     });
   }
 
+  #insertEvent(
+    deploymentId: string,
+    type: string,
+    message: string,
+    payload?: Record<string, unknown>,
+    createdAt = nowIso(),
+  ): DeploymentEvent {
+    const result = this.#db
+      .prepare(
+        `
+      INSERT INTO deployment_events (
+        deployment_id, type, message, payload_json, created_at
+      ) VALUES (?, ?, ?, ?, ?)
+    `,
+      )
+      .run(
+        deploymentId,
+        type,
+        message,
+        payload ? JSON.stringify(payload) : null,
+        createdAt,
+      );
+
+    return {
+      id: Number(result.lastInsertRowid),
+      deploymentId,
+      type,
+      message,
+      payload: payload ?? {},
+      createdAt,
+    };
+  }
+
   #toPublic(row: DeploymentRow): DeploymentPublic {
     return {
       id: row.id,
@@ -313,31 +346,7 @@ export class DeploymentsStore {
     message: string,
     payload?: Record<string, unknown>,
   ): DeploymentEvent {
-    const createdAt = nowIso();
-    const result = this.#db
-      .prepare(
-        `
-      INSERT INTO deployment_events (
-        deployment_id, type, message, payload_json, created_at
-      ) VALUES (?, ?, ?, ?, ?)
-    `,
-      )
-      .run(
-        deploymentId,
-        type,
-        message,
-        payload ? JSON.stringify(payload) : null,
-        createdAt,
-      );
-
-    const event: DeploymentEvent = {
-      id: Number(result.lastInsertRowid),
-      deploymentId,
-      type,
-      message,
-      payload: payload ?? {},
-      createdAt,
-    };
+    const event = this.#insertEvent(deploymentId, type, message, payload);
     this.#notifyEventAppended(event);
     return event;
   }
@@ -512,6 +521,7 @@ export class DeploymentsStore {
 
     if (staleRows.length === 0) return;
 
+    const pendingEventNotifications: DeploymentEvent[] = [];
     const tx = this.#db.transaction((rows: DeploymentRow[]) => {
       const updatedAt = nowIso();
       for (const row of rows) {
@@ -534,10 +544,14 @@ export class DeploymentsStore {
               "Worker lease expired during provisioning; scheduling cleanup",
               row.id,
             );
-          this.appendEvent(
-            row.id,
-            "deployment.recovered.destroy_queued",
-            "Worker lease expired; queued cleanup to avoid orphaned resources",
+          pendingEventNotifications.push(
+            this.#insertEvent(
+              row.id,
+              "deployment.recovered.destroy_queued",
+              "Worker lease expired; queued cleanup to avoid orphaned resources",
+              undefined,
+              updatedAt,
+            ),
           );
         } else {
           this.#db
@@ -561,15 +575,22 @@ export class DeploymentsStore {
               "Worker lease expired before resources were attached",
               row.id,
             );
-          this.appendEvent(
-            row.id,
-            "deployment.failed",
-            "Worker lease expired before provisioning completed",
+          pendingEventNotifications.push(
+            this.#insertEvent(
+              row.id,
+              "deployment.failed",
+              "Worker lease expired before provisioning completed",
+              undefined,
+              updatedAt,
+            ),
           );
         }
       }
     });
     tx(staleRows);
+    for (const event of pendingEventNotifications) {
+      this.#notifyEventAppended(event);
+    }
     for (const row of staleRows) {
       this.#notifyDeploymentChangedById(row.id);
     }
