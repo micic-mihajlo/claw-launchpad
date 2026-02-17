@@ -171,6 +171,9 @@ export class DeploymentsStore {
       CREATE INDEX IF NOT EXISTS idx_deployments_cancel ON deployments(cancel_requested_at);
       CREATE INDEX IF NOT EXISTS idx_deployments_lease ON deployments(lease_expires_at);
       CREATE INDEX IF NOT EXISTS idx_deployments_billing_ref ON deployments(billing_ref);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_deployments_billing_ref_unique
+      ON deployments(billing_ref)
+      WHERE billing_ref IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_deployment_events_deployment ON deployment_events(deployment_id, id DESC);
     `);
   }

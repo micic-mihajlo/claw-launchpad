@@ -100,6 +100,12 @@ export type CheckoutIdempotentResponse = {
   createdAt: string;
 };
 
+export type CheckoutIdempotencyBeginResult =
+  | { state: "acquired" }
+  | { state: "completed"; response: Record<string, unknown> }
+  | { state: "in_progress"; retryAfterSeconds: number }
+  | { state: "conflict" };
+
 export type WebhookBeginResult =
   | { shouldProcess: true }
   | {
@@ -118,6 +124,20 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+const IDEMPOTENCY_IN_PROGRESS_STATE = "in_progress";
+
+type IdempotencyInProgressMarker = {
+  state: typeof IDEMPOTENCY_IN_PROGRESS_STATE;
+  updatedAt: string;
+};
+
+function buildInProgressMarker(now: string): IdempotencyInProgressMarker {
+  return {
+    state: IDEMPOTENCY_IN_PROGRESS_STATE,
+    updatedAt: now,
+  };
 }
 
 export class BillingStore {
@@ -487,10 +507,10 @@ export class BillingStore {
   markOrderDeploymentCreated(orderId: string, deploymentId: string): BillingOrderPublic | null {
     const existing = this.#getOrderRow(orderId);
     if (!existing) return null;
-    if (!["paid", "deployment_created"].includes(existing.status)) {
+    if (existing.status === "deployment_created") {
       return this.#toPublic(existing);
     }
-    if (existing.status === "deployment_created" && existing.deployment_id === deploymentId) {
+    if (existing.status !== "paid") {
       return this.#toPublic(existing);
     }
 
@@ -505,17 +525,15 @@ export class BillingStore {
         error_message = NULL,
         completed_at = COALESCE(completed_at, ?),
         updated_at = ?
-      WHERE id = ? AND status IN ('paid','deployment_created')
+      WHERE id = ? AND status = 'paid'
       RETURNING *
     `,
       )
       .get(deploymentId, updatedAt, updatedAt, orderId) as BillingOrderRow | undefined;
     if (!row) return this.getOrder(orderId);
-    if (row.status === "deployment_created" && existing.status !== "deployment_created") {
-      this.appendOrderEvent(orderId, "order.deployment.created", "Deployment created from paid order", {
-        deploymentId,
-      });
-    }
+    this.appendOrderEvent(orderId, "order.deployment.created", "Deployment created from paid order", {
+      deploymentId,
+    });
     return this.#toPublic(row);
   }
 
@@ -551,15 +569,109 @@ export class BillingStore {
     return this.#toPublic(row);
   }
 
-  getCheckoutIdempotency(idempotencyKey: string): CheckoutIdempotentResponse | null {
+  beginCheckoutIdempotency(
+    idempotencyKey: string,
+    requestHash: string,
+    options: {
+      staleAfterMs?: number;
+    } = {},
+  ): CheckoutIdempotencyBeginResult {
+    const staleAfterMs = Math.max(30_000, Number(options.staleAfterMs || 2 * 60_000));
+    const tx = this.#db.transaction(
+      (key: string, hash: string, staleMs: number): CheckoutIdempotencyBeginResult => {
+        const now = nowIso();
+        const existing = this.#db
+          .prepare(
+            `
+          SELECT * FROM billing_checkout_idempotency WHERE idempotency_key = ?
+        `,
+          )
+          .get(key) as CheckoutIdempotencyRow | undefined;
+
+        if (!existing) {
+          this.#db
+            .prepare(
+              `
+            INSERT INTO billing_checkout_idempotency (
+              idempotency_key, request_hash, response_json, created_at
+            ) VALUES (?, ?, ?, ?)
+          `,
+            )
+            .run(key, hash, JSON.stringify(buildInProgressMarker(now)), now);
+          return { state: "acquired" };
+        }
+
+        if (existing.request_hash !== hash) {
+          return { state: "conflict" };
+        }
+
+        const parsed = parseJson<Record<string, unknown>>(existing.response_json, {});
+        const inProgress =
+          parsed.state === IDEMPOTENCY_IN_PROGRESS_STATE
+            ? (parsed as Partial<IdempotencyInProgressMarker>)
+            : null;
+
+        if (!inProgress) {
+          return { state: "completed", response: parsed };
+        }
+
+        const lastUpdatedRaw = typeof inProgress.updatedAt === "string" ? inProgress.updatedAt : existing.created_at;
+        const lastUpdatedMs = Date.parse(lastUpdatedRaw);
+        if (Number.isFinite(lastUpdatedMs) && Date.now() - lastUpdatedMs < staleMs) {
+          const remainingMs = Math.max(1000, staleMs - (Date.now() - lastUpdatedMs));
+          return {
+            state: "in_progress",
+            retryAfterSeconds: Math.ceil(remainingMs / 1000),
+          };
+        }
+
+        this.#db
+          .prepare(
+            `
+          UPDATE billing_checkout_idempotency
+          SET response_json = ?, created_at = ?
+          WHERE idempotency_key = ? AND request_hash = ?
+        `,
+          )
+          .run(JSON.stringify(buildInProgressMarker(now)), now, key, hash);
+
+        return { state: "acquired" };
+      },
+    );
+
+    return tx(idempotencyKey, requestHash, staleAfterMs);
+  }
+
+  finalizeCheckoutIdempotency(
+    idempotencyKey: string,
+    requestHash: string,
+    response: Record<string, unknown>,
+  ): CheckoutIdempotentResponse {
+    const updated = this.#db
+      .prepare(
+        `
+      UPDATE billing_checkout_idempotency
+      SET response_json = ?
+      WHERE idempotency_key = ? AND request_hash = ?
+    `,
+      )
+      .run(JSON.stringify(response), idempotencyKey, requestHash);
+    if (updated.changes === 0) {
+      throw new Error("Failed to finalize checkout idempotency response");
+    }
+
     const row = this.#db
       .prepare(
         `
-      SELECT * FROM billing_checkout_idempotency WHERE idempotency_key = ?
+      SELECT * FROM billing_checkout_idempotency
+      WHERE idempotency_key = ? AND request_hash = ?
     `,
       )
-      .get(idempotencyKey) as CheckoutIdempotencyRow | undefined;
-    if (!row) return null;
+      .get(idempotencyKey, requestHash) as CheckoutIdempotencyRow | undefined;
+    if (!row) {
+      throw new Error("Failed to load finalized checkout idempotency response");
+    }
+
     return {
       idempotencyKey: row.idempotency_key,
       requestHash: row.request_hash,
@@ -568,33 +680,15 @@ export class BillingStore {
     };
   }
 
-  saveCheckoutIdempotency(
-    idempotencyKey: string,
-    requestHash: string,
-    response: Record<string, unknown>,
-  ): CheckoutIdempotentResponse {
-    const createdAt = nowIso();
+  clearCheckoutIdempotency(idempotencyKey: string, requestHash: string) {
     this.#db
       .prepare(
         `
-      INSERT INTO billing_checkout_idempotency (
-        idempotency_key, request_hash, response_json, created_at
-      ) VALUES (?, ?, ?, ?)
-      ON CONFLICT(idempotency_key) DO NOTHING
+      DELETE FROM billing_checkout_idempotency
+      WHERE idempotency_key = ? AND request_hash = ?
     `,
       )
-      .run(
-        idempotencyKey,
-        requestHash,
-        JSON.stringify(response),
-        createdAt,
-      );
-
-    const current = this.getCheckoutIdempotency(idempotencyKey);
-    if (!current) {
-      throw new Error("Failed to persist checkout idempotency response");
-    }
-    return current;
+      .run(idempotencyKey, requestHash);
   }
 
   beginStripeWebhookEvent(
@@ -608,42 +702,42 @@ export class BillingStore {
 
     const tx = this.#db.transaction(
       (id: string, type: string, timeoutMs: number): WebhookBeginResult => {
-      const existing = this.#db
-        .prepare(
-          `
-        SELECT * FROM stripe_webhook_events WHERE event_id = ?
-      `,
-        )
-        .get(id) as StripeWebhookEventRow | undefined;
-
-      if (!existing) {
-        const now = nowIso();
-        this.#db
+        const existing = this.#db
           .prepare(
             `
+        SELECT * FROM stripe_webhook_events WHERE event_id = ?
+      `,
+          )
+          .get(id) as StripeWebhookEventRow | undefined;
+
+        if (!existing) {
+          const now = nowIso();
+          this.#db
+            .prepare(
+              `
           INSERT INTO stripe_webhook_events (
             event_id, event_type, status, error_message, received_at, processed_at, updated_at
           ) VALUES (?, ?, 'processing', NULL, ?, NULL, ?)
         `,
-          )
-          .run(id, type, now, now);
-        return { shouldProcess: true };
-      }
+            )
+            .run(id, type, now, now);
+          return { shouldProcess: true };
+        }
 
-      if (existing.status === "processed" || existing.status === "ignored") {
-        return { shouldProcess: false, status: existing.status };
-      }
-
-      if (existing.status === "processing") {
-        const updatedAtMs = Date.parse(existing.updated_at || existing.received_at);
-        if (Number.isFinite(updatedAtMs) && Date.now() - updatedAtMs < timeoutMs) {
+        if (existing.status === "processed" || existing.status === "ignored") {
           return { shouldProcess: false, status: existing.status };
         }
 
-        const now = nowIso();
-        this.#db
-          .prepare(
-            `
+        if (existing.status === "processing") {
+          const updatedAtMs = Date.parse(existing.updated_at || existing.received_at);
+          if (Number.isFinite(updatedAtMs) && Date.now() - updatedAtMs < timeoutMs) {
+            return { shouldProcess: false, status: existing.status };
+          }
+
+          const now = nowIso();
+          this.#db
+            .prepare(
+              `
           UPDATE stripe_webhook_events
           SET
             event_type = ?,
@@ -652,15 +746,15 @@ export class BillingStore {
             updated_at = ?
           WHERE event_id = ?
         `,
-          )
-          .run(type, now, id);
-        return { shouldProcess: true };
-      }
+            )
+            .run(type, now, id);
+          return { shouldProcess: true };
+        }
 
-      const now = nowIso();
-      this.#db
-        .prepare(
-          `
+        const now = nowIso();
+        this.#db
+          .prepare(
+            `
         UPDATE stripe_webhook_events
         SET
           event_type = ?,
@@ -669,10 +763,11 @@ export class BillingStore {
           updated_at = ?
         WHERE event_id = ?
       `,
-        )
-        .run(type, now, id);
-      return { shouldProcess: true };
-    });
+          )
+          .run(type, now, id);
+        return { shouldProcess: true };
+      },
+    );
     return tx(eventId, eventType, processingTimeoutMs);
   }
 

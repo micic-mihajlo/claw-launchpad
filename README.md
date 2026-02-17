@@ -95,6 +95,7 @@ Required API env for worker mode:
 - `DEPLOYMENTS_ENCRYPTION_KEY` (encrypt secrets at rest)
 - `PROVISIONER_SSH_PUBLIC_KEY_PATH`
 - optionally `PROVISIONER_SSH_PRIVATE_KEY_PATH`
+- optionally `API_BEARER_TOKEN` (recommended for production; applies to `/v1/*` except Stripe webhook)
 
 Required API env for Stripe billing:
 - `STRIPE_SECRET_KEY`

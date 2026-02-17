@@ -59,6 +59,10 @@ On provisioning failure or cancel:
 - `POST /v1/orders/:id/provision`
 - `GET /v1/control-plane/health`
 
+Authentication:
+- optional bearer token via `API_BEARER_TOKEN` for `/v1/*`
+- `POST /v1/webhooks/stripe` is intentionally excluded from bearer auth and relies on Stripe signature verification
+
 ## Billing Order Flow
 
 `billing_orders` state model:
@@ -85,6 +89,7 @@ Flow:
 - `DEPLOY_WORKER_LEASE_MS`
 - `PROVISIONER_SSH_PUBLIC_KEY_PATH`
 - `PROVISIONER_SSH_PRIVATE_KEY_PATH` (optional)
+- `API_BEARER_TOKEN` (optional but recommended)
 - `BILLING_DB_PATH`
 - `STRIPE_SECRET_KEY`
 - `STRIPE_WEBHOOK_SECRET`

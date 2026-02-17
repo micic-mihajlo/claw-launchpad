@@ -122,6 +122,7 @@ const autoProvisionPaidOrders = process.env.BILLING_AUTO_PROVISION_ON_PAYMENT !=
 const stripeCheckoutSuccessUrlDefault = String(process.env.STRIPE_CHECKOUT_SUCCESS_URL || "").trim();
 const stripeCheckoutCancelUrlDefault = String(process.env.STRIPE_CHECKOUT_CANCEL_URL || "").trim();
 const stripeTimeoutMs = Number.parseInt(process.env.STRIPE_TIMEOUT_MS || "20000", 10);
+const apiBearerToken = String(process.env.API_BEARER_TOKEN || "").trim();
 const provisionerSshPublicKeyPath = process.env.PROVISIONER_SSH_PUBLIC_KEY_PATH || "";
 const provisionerSshPrivateKeyPath = process.env.PROVISIONER_SSH_PRIVATE_KEY_PATH || "";
 const convexSyncEnabled = process.env.CONVEX_SYNC_ENABLED === "true";
@@ -207,11 +208,37 @@ app.use(
   "*",
   cors({
     origin: process.env.WEB_ORIGIN || "http://localhost:5173",
-    allowHeaders: ["content-type", "idempotency-key"],
+    allowHeaders: ["content-type", "idempotency-key", "authorization", "stripe-signature"],
     allowMethods: ["GET", "POST", "OPTIONS"],
     maxAge: 600,
   }),
 );
+
+app.use("/v1/*", async (c, next) => {
+  if (c.req.path === "/v1/webhooks/stripe") {
+    await next();
+    return;
+  }
+
+  if (!apiBearerToken) {
+    await next();
+    return;
+  }
+
+  const authorization = String(c.req.header("authorization") || "");
+  const expected = `Bearer ${apiBearerToken}`;
+  const providedBuffer = Buffer.from(authorization);
+  const expectedBuffer = Buffer.from(expected);
+  const authorized =
+    providedBuffer.length === expectedBuffer.length &&
+    crypto.timingSafeEqual(providedBuffer, expectedBuffer);
+
+  if (!authorized) {
+    return jsonError(c, 401, "Unauthorized");
+  }
+
+  await next();
+});
 
 app.get("/health", (c) => c.json({ ok: true }));
 
@@ -222,6 +249,9 @@ app.get("/v1/control-plane/health", (c) => {
     workerEnabled,
     workerRunning: Boolean(deploymentsWorker),
     issues: controlPlaneIssues,
+    auth: {
+      enabled: Boolean(apiBearerToken),
+    },
     billing: {
       autoProvisionPaidOrders,
       plansLoaded: billingPlans.length,
@@ -468,6 +498,11 @@ function createDeploymentFromInput(
   });
 }
 
+function isDuplicateBillingRefError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return /deployments\.billing_ref|idx_deployments_billing_ref_unique/i.test(error.message);
+}
+
 async function queueDeploymentFromPaidOrder(
   orderId: string,
   trigger: "stripe_webhook" | "manual_order_provision",
@@ -492,6 +527,15 @@ async function queueDeploymentFromPaidOrder(
   }
   if (order.status === "expired" || order.status === "canceled") {
     throw createHttpError(409, `Order is ${order.status}`);
+  }
+  if (!order.paidAt) {
+    throw createHttpError(409, "Order has not been paid");
+  }
+  if (order.status === "deployment_created") {
+    throw createHttpError(409, "Order is already linked to a deployment");
+  }
+  if (!["paid", "failed"].includes(order.status)) {
+    throw createHttpError(409, `Order cannot be provisioned from status ${order.status}`);
   }
 
   assertDeploymentsWritable();
@@ -549,6 +593,18 @@ async function queueDeploymentFromPaidOrder(
       created: true,
     };
   } catch (error) {
+    if (isDuplicateBillingRefError(error)) {
+      const concurrentDeployment = deploymentsStore.getPublicByBillingRef(order.id);
+      if (concurrentDeployment) {
+        const linked = billingStore.markOrderDeploymentCreated(order.id, concurrentDeployment.id);
+        return {
+          order: linked ?? billingStore.getOrder(order.id),
+          deployment: concurrentDeployment,
+          created: false,
+        };
+      }
+    }
+
     const failed = billingStore.markOrderFailed(
       order.id,
       error instanceof Error ? error.message : String(error),
@@ -766,14 +822,24 @@ app.post("/v1/billing/checkout", async (c) => {
     return jsonError(c, 400, "Unable to compute request fingerprint");
   }
 
+  let idempotencyClaimed = false;
   if (idempotencyKey) {
-    const existing = billingStore.getCheckoutIdempotency(idempotencyKey);
-    if (existing) {
-      if (existing.requestHash !== requestFingerprint) {
-        return jsonError(c, 409, "Idempotency-Key already used with different payload");
-      }
-      return c.json(existing.response);
+    const begin = billingStore.beginCheckoutIdempotency(idempotencyKey, requestFingerprint);
+    if (begin.state === "conflict") {
+      return jsonError(c, 409, "Idempotency-Key already used with different payload");
     }
+    if (begin.state === "completed") {
+      return c.json(begin.response);
+    }
+    if (begin.state === "in_progress") {
+      return jsonError(
+        c,
+        409,
+        "Idempotency-Key request is already processing; retry shortly",
+        { retryAfterSeconds: begin.retryAfterSeconds },
+      );
+    }
+    idempotencyClaimed = true;
   }
 
   const orderId = crypto.randomUUID();
@@ -819,12 +885,16 @@ app.post("/v1/billing/checkout", async (c) => {
       },
     };
 
-    if (idempotencyKey) {
-      billingStore.saveCheckoutIdempotency(idempotencyKey, requestFingerprint, responsePayload);
+    if (idempotencyKey && idempotencyClaimed) {
+      billingStore.finalizeCheckoutIdempotency(idempotencyKey, requestFingerprint, responsePayload);
     }
 
     return c.json(responsePayload, 201);
   } catch (error) {
+    if (idempotencyKey && idempotencyClaimed) {
+      billingStore.clearCheckoutIdempotency(idempotencyKey, requestFingerprint);
+    }
+
     const message = error instanceof Error ? error.message : String(error);
     const failed = billingStore.markOrderFailed(
       order.id,
