@@ -132,7 +132,6 @@ const convexDeployKey = process.env.CONVEX_DEPLOY_KEY || "";
 const { plans: billingPlans, issues: billingPlanIssues } = loadBillingPlans(process.env.BILLING_PLANS_JSON);
 const billingPlansById = plansMap(billingPlans);
 const authState = createAuthState();
-const authState = createAuthState();
 
 const convexMirror = new ConvexMirrorClient({
   enabled: convexSyncEnabled,
