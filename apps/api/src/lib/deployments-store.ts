@@ -485,7 +485,7 @@ export class DeploymentsStore {
         this.#notifyDeploymentChanged(deployment);
         return deployment;
       }
-      return this.getPublic(id);
+      return this.getPublicForOwner(ownerUserId, id);
     }
 
     const row = this.#db
@@ -501,7 +501,7 @@ export class DeploymentsStore {
       )
       .get(canceledAt, updatedAt, id, ownerUserId) as DeploymentRow | undefined;
     if (!row) {
-      return this.getPublic(id);
+      return this.getPublicForOwner(ownerUserId, id);
     }
 
     this.appendEvent(id, "deployment.cancel.requested", "Cancel requested; cleanup will be attempted", {
@@ -546,7 +546,7 @@ export class DeploymentsStore {
       )
       .get(updatedAt, id, ownerUserId) as DeploymentRow | undefined;
     if (!row) {
-      return this.getPublic(id);
+      return this.getPublicForOwner(ownerUserId, id);
     }
 
     this.appendEvent(id, "deployment.retried", "Deployment moved back to pending");
