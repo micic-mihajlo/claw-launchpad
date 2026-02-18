@@ -127,11 +127,19 @@ function buildJwtResolver(options: JwtOptions): (authorizationHeader: string | n
   };
 }
 
-function createTokenAuthState(defaultUserId: string, issues: AuthIssue[]): AuthState {
+function createTokenAuthState(
+  defaultUserId: string,
+  issues: AuthIssue[],
+): AuthState {
   const tokenMapSource = process.env.AUTH_TOKEN_MAP?.trim();
   const singleToken = process.env.AUTH_TOKEN?.trim();
+  const legacyToken = process.env.API_BEARER_TOKEN?.trim();
 
   const tokenToUser: Record<string, string> = {};
+
+  if (legacyToken) {
+    tokenToUser[legacyToken] = defaultUserId;
+  }
 
   if (tokenMapSource) {
     try {
@@ -213,7 +221,8 @@ function createJwtAuthState(defaultUserId: string, issues: AuthIssue[]): AuthSta
 }
 
 export function createAuthState(): AuthState {
-  const enabled = parseBoolean(process.env.AUTH_ENABLED);
+  const legacyToken = process.env.API_BEARER_TOKEN?.trim();
+  const enabled = parseBoolean(process.env.AUTH_ENABLED) || Boolean(legacyToken);
   const issues: AuthIssue[] = [];
   const defaultUserId = (process.env.AUTH_DEFAULT_USER_ID || SYSTEM_USER_ID).trim() || SYSTEM_USER_ID;
 

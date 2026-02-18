@@ -229,7 +229,7 @@ const requireAuth: MiddlewareHandler<{ Variables: { userId: string } }> = async 
 
   const userId = await authState.resolveUserId(c.req.header("authorization") ?? null);
   if (!userId) {
-    return jsonError(c, 401, "Unauthorized", "Missing or invalid Authorization bearer token");
+    return jsonError(c, 401, "Unauthorized");
   }
 
   c.set("userId", userId);
@@ -237,8 +237,11 @@ const requireAuth: MiddlewareHandler<{ Variables: { userId: string } }> = async 
 };
 
 app.use("/v1/connectors/*", requireAuth);
+app.use("/v1/billing/*", requireAuth);
 app.use("/v1/deployments", requireAuth);
 app.use("/v1/deployments/*", requireAuth);
+app.use("/v1/orders", requireAuth);
+app.use("/v1/orders/*", requireAuth);
 
 app.get("/health", (c) => c.json({ ok: true }));
 
