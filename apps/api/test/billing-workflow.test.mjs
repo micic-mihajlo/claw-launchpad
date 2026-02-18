@@ -245,6 +245,33 @@ test("auth protects /v1 routes while Stripe webhook stays signature-based", asyn
   });
 });
 
+test("control-plane health endpoint requires authentication", async (t) => {
+  const ctx = await createContext(t);
+
+  const noAuth = await fetch(`${ctx.baseUrl}/v1/control-plane/health`);
+  assert.equal(noAuth.status, 401);
+  assert.deepEqual(await noAuth.json(), { ok: false, error: "Unauthorized" });
+
+  const withAuth = await fetch(`${ctx.baseUrl}/v1/control-plane/health`, {
+    headers: authHeaders(ctx.apiToken),
+  });
+  assert.equal(withAuth.status, 200);
+  const body = await withAuth.json();
+  assert.equal(body.ok, true);
+});
+
+test("prototype token names are rejected during auth", async (t) => {
+  const ctx = await createContext(t);
+
+  for (const token of ["constructor", "toString", "valueOf", "hasOwnProperty", "__proto__"]) {
+    const response = await fetch(`${ctx.baseUrl}/v1/orders`, {
+      headers: authHeaders(token),
+    });
+    assert.equal(response.status, 401);
+    assert.deepEqual(await response.json(), { ok: false, error: "Unauthorized" });
+  }
+});
+
 test("checkout.session.completed with unpaid status stays pending until async success", async (t) => {
   const ctx = await createContext(t);
   const store = ctx.openBillingStore();
