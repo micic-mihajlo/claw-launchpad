@@ -115,12 +115,18 @@ async function stopServer(child) {
   }
 }
 
-async function createContext(t) {
+async function createContext(
+  t,
+  options = {},
+) {
   const tmpRoot = await mkdtemp(path.join(tmpdir(), "clawpad-api-test-"));
   const deploymentsDbPath = path.join(tmpRoot, "deployments.db");
   const billingDbPath = path.join(tmpRoot, "billing.db");
   const sshPubPath = path.join(tmpRoot, "id_ed25519.pub");
-  const apiToken = "test-api-token";
+  const {
+    apiToken = "test-api-token",
+    env: contextEnv = {},
+  } = options;
   const stripeWebhookSecret = "whsec_test_local";
   const deploymentKey = "test-deployment-encryption-key";
   const port = await getFreePort();
@@ -136,6 +142,7 @@ async function createContext(t) {
     cwd: apiDir,
     env: {
       ...process.env,
+      ...contextEnv,
       PORT: String(port),
       API_BEARER_TOKEN: apiToken,
       DEPLOYMENTS_DB_PATH: deploymentsDbPath,
@@ -552,4 +559,51 @@ test("manual order provisioning is idempotent and never creates duplicate deploy
   const orderAfter = await ctx.getOrder(order.id);
   assert.equal(orderAfter.status, "deployment_created");
   assert.equal(orderAfter.deploymentId, deployments[0].id);
+});
+
+test("manual provisioning assigns deployment to the authenticated user", async (t) => {
+  const ctx = await createContext(t, {
+    apiToken: "user-token-1",
+    env: {
+      AUTH_ENABLED: "true",
+      AUTH_TOKEN_MAP: JSON.stringify({
+        "user-token-1": "tenant-user-1",
+      }),
+      AUTH_DEFAULT_USER_ID: "system",
+    },
+  });
+  const store = ctx.openBillingStore();
+
+  const order = store.createOrder({
+    id: crypto.randomUUID(),
+    provider: "stripe",
+    planId: "hetzner-cx23-launch",
+    amountCents: 4900,
+    currency: "usd",
+    deploymentInputEncrypted: createEncryptedDeploymentInput(ctx.deploymentKey),
+  });
+
+  const checkoutSessionId = `cs_paid_${crypto.randomUUID().replaceAll("-", "")}`;
+  store.setCheckoutSession(order.id, {
+    checkoutSessionId,
+    checkoutUrl: null,
+  });
+  store.markOrderPaid(order.id, {
+    stripeCheckoutSessionId: checkoutSessionId,
+    customerEmail: "tenant1@example.com",
+  });
+  store.close();
+
+  const provisionResponse = await fetch(`${ctx.baseUrl}/v1/orders/${order.id}/provision`, {
+    method: "POST",
+    headers: authHeaders(ctx.apiToken),
+  });
+  assert.equal(provisionResponse.status, 200);
+  const provisionBody = await provisionResponse.json();
+  assert.equal(provisionBody.ok, true);
+  assert.equal(provisionBody.deployment.ownerUserId, "tenant-user-1");
+
+  const deployments = await ctx.getDeployments();
+  assert.equal(deployments.length, 1);
+  assert.equal(deployments[0].ownerUserId, "tenant-user-1");
 });

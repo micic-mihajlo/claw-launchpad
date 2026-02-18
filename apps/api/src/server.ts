@@ -514,6 +514,7 @@ function isDuplicateBillingRefError(error: unknown): boolean {
 async function queueDeploymentFromPaidOrder(
   orderId: string,
   trigger: "stripe_webhook" | "manual_order_provision",
+  ownerUserId?: string,
 ) {
   const order = billingStore.getOrderInternal(orderId);
   if (!order) {
@@ -579,7 +580,7 @@ async function queueDeploymentFromPaidOrder(
         billingRef: order.id,
       },
       {
-        ownerUserId: authState.defaultUserId,
+        ownerUserId: ownerUserId || authState.defaultUserId,
         billingRef: order.id,
         metadataOverride: {
           billingOrderId: order.id,
@@ -1038,7 +1039,8 @@ app.get("/v1/orders/:id", (c) => {
 app.post("/v1/orders/:id/provision", async (c) => {
   const orderId = c.req.param("id");
   try {
-    const queued = await queueDeploymentFromPaidOrder(orderId, "manual_order_provision");
+    const userId = c.get("userId");
+    const queued = await queueDeploymentFromPaidOrder(orderId, "manual_order_provision", userId);
     return c.json({
       ok: true,
       order: queued.order,
