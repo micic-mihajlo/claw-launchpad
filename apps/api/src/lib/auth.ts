@@ -1,4 +1,5 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createHash, timingSafeEqual } from "node:crypto";
 
 export type AuthMode = "disabled" | "token" | "jwt";
 
@@ -48,13 +49,16 @@ function parseOptionalStringArray(raw: string | undefined): string[] | undefined
   return items.length > 0 ? items : undefined;
 }
 
-function parseTokenMap(raw: string): Record<string, string> {
+type TokenMap = Map<string, string>;
+type HashedTokenEntry = { tokenHash: Buffer; userId: string };
+
+function parseTokenMap(raw: string): TokenMap {
   const parsed = JSON.parse(raw);
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error("AUTH_TOKEN_MAP must be a JSON object mapping token -> userId");
   }
 
-  const map: Record<string, string> = {};
+  const map: TokenMap = new Map();
   for (const [token, userId] of Object.entries(parsed)) {
     if (typeof token !== "string" || typeof userId !== "string") {
       throw new Error("AUTH_TOKEN_MAP entries must be token => string userId pairs");
@@ -66,7 +70,7 @@ function parseTokenMap(raw: string): Record<string, string> {
       throw new Error("AUTH_TOKEN_MAP entries must contain non-empty token and userId");
     }
 
-    map[normalizedToken] = normalizedUserId;
+    map.set(normalizedToken, normalizedUserId);
   }
 
   return map;
@@ -82,11 +86,25 @@ function normalizeBearerToken(header: string | null): string | null {
   return match ? match[1].trim() : trimmed;
 }
 
-function buildTokenResolver(tokenToUser: Record<string, string>) {
+function buildTokenResolver(tokenToUser: TokenMap) {
+  const entries: HashedTokenEntry[] = Array.from(tokenToUser.entries()).map(([token, userId]) => ({
+    tokenHash: createHash("sha256").update(token).digest(),
+    userId,
+  }));
+
   return async (authorizationHeader: string | null): Promise<string | null> => {
     const token = normalizeBearerToken(authorizationHeader);
     if (!token) return null;
-    return tokenToUser[token] ?? null;
+
+    const tokenHash = createHash("sha256").update(token).digest();
+    let resolvedUserId: string | null = null;
+    for (const entry of entries) {
+      if (timingSafeEqual(entry.tokenHash, tokenHash)) {
+        resolvedUserId = entry.userId;
+      }
+    }
+
+    return resolvedUserId;
   };
 }
 
@@ -135,27 +153,29 @@ function createTokenAuthState(
   const singleToken = process.env.AUTH_TOKEN?.trim();
   const legacyToken = process.env.API_BEARER_TOKEN?.trim();
 
-  const tokenToUser: Record<string, string> = {};
+  const tokenToUser: TokenMap = new Map();
 
   if (legacyToken) {
-    tokenToUser[legacyToken] = defaultUserId;
+    tokenToUser.set(legacyToken, defaultUserId);
   }
 
   if (tokenMapSource) {
     try {
-      Object.assign(tokenToUser, parseTokenMap(tokenMapSource));
+      for (const [token, userId] of parseTokenMap(tokenMapSource).entries()) {
+        tokenToUser.set(token, userId);
+      }
     } catch (error) {
       issues.push(error instanceof Error ? error.message : String(error));
     }
   }
 
   if (singleToken) {
-    if (!tokenToUser[singleToken]) {
-      tokenToUser[singleToken] = defaultUserId;
+    if (!tokenToUser.has(singleToken)) {
+      tokenToUser.set(singleToken, defaultUserId);
     }
   }
 
-  if (Object.keys(tokenToUser).length === 0) {
+  if (tokenToUser.size === 0) {
     issues.push("AUTH enabled but no usable token configuration. Set AUTH_TOKEN or AUTH_TOKEN_MAP.");
   }
 

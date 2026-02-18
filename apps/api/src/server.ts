@@ -242,6 +242,7 @@ app.use("/v1/deployments", requireAuth);
 app.use("/v1/deployments/*", requireAuth);
 app.use("/v1/orders", requireAuth);
 app.use("/v1/orders/*", requireAuth);
+app.use("/v1/control-plane/health", requireAuth);
 
 app.get("/health", (c) => c.json({ ok: true }));
 
