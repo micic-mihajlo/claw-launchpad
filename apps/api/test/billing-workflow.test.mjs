@@ -607,3 +607,64 @@ test("manual provisioning assigns deployment to the authenticated user", async (
   assert.equal(deployments.length, 1);
   assert.equal(deployments[0].ownerUserId, "tenant-user-1");
 });
+
+test("stripe webhook auto-provisioned deployment is owned by checkout user", async (t) => {
+  const ctx = await createContext(t, {
+    apiToken: "user-token-1",
+    env: {
+      AUTH_ENABLED: "true",
+      AUTH_TOKEN_MAP: JSON.stringify({
+        "user-token-1": "tenant-user-1",
+      }),
+      AUTH_DEFAULT_USER_ID: "system",
+    },
+  });
+  const store = ctx.openBillingStore();
+
+  const order = store.createOrder({
+    id: crypto.randomUUID(),
+    provider: "stripe",
+    planId: "hetzner-cx23-launch",
+    amountCents: 4900,
+    currency: "usd",
+    ownerUserId: "tenant-user-1",
+    deploymentInputEncrypted: createEncryptedDeploymentInput(ctx.deploymentKey),
+    customerEmail: "tenant1-webhook@example.com",
+  });
+
+  const checkoutSessionId = `cs_test_${crypto.randomUUID().replaceAll("-", "")}`;
+  store.setCheckoutSession(order.id, {
+    checkoutSessionId,
+    checkoutUrl: `https://checkout.stripe.com/cs/${checkoutSessionId}`,
+  });
+  store.close();
+
+  const payload = {
+    id: checkoutSessionId,
+    object: "checkout.session",
+    client_reference_id: order.id,
+    metadata: { order_id: order.id },
+    payment_status: "paid",
+    payment_intent: `pi_${crypto.randomUUID().replaceAll("-", "")}`,
+    customer: `cus_${crypto.randomUUID().replaceAll("-", "")}`,
+    customer_email: "tenant1-webhook@example.com",
+    customer_details: { email: "tenant1-webhook@example.com" },
+    url: `https://checkout.stripe.com/pay/${checkoutSessionId}`,
+  };
+
+  const { response: webhookResponse } = await postStripeWebhook(
+    ctx.baseUrl,
+    "checkout.session.async_payment_succeeded",
+    payload,
+    ctx.stripeWebhookSecret,
+  );
+  assert.equal(webhookResponse.status, 200);
+  const webhookBody = await webhookResponse.json();
+  assert.equal(webhookBody.ok, true);
+  assert.equal(webhookBody.autoProvision, true);
+  assert.equal(webhookBody.deployment.ownerUserId, "tenant-user-1");
+
+  const deployments = await ctx.getDeployments();
+  assert.equal(deployments.length, 1);
+  assert.equal(deployments[0].ownerUserId, "tenant-user-1");
+});

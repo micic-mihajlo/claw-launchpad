@@ -177,7 +177,6 @@ export class DeploymentsStore {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_deployments_billing_ref_unique
       ON deployments(billing_ref)
       WHERE billing_ref IS NOT NULL;
-      CREATE INDEX IF NOT EXISTS idx_deployments_owner_user_id ON deployments(owner_user_id);
       CREATE INDEX IF NOT EXISTS idx_deployment_events_deployment ON deployment_events(deployment_id, id DESC);
     `);
 
@@ -187,10 +186,11 @@ export class DeploymentsStore {
       this.#db.exec(`
         ALTER TABLE deployments ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT 'system';
       `);
-      this.#db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_deployments_owner_user_id ON deployments(owner_user_id);
-      `);
     }
+
+    this.#db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_deployments_owner_user_id ON deployments(owner_user_id);
+    `);
   }
 
   close() {

@@ -574,13 +574,14 @@ async function queueDeploymentFromPaidOrder(
   }
 
   try {
+    const resolvedOwnerUserId = ownerUserId?.trim() || order.ownerUserId || authState.defaultUserId;
     const deployment = createDeploymentFromInput(
       {
         ...parsedStoredInput.data,
         billingRef: order.id,
       },
       {
-        ownerUserId: ownerUserId || authState.defaultUserId,
+        ownerUserId: resolvedOwnerUserId,
         billingRef: order.id,
         metadataOverride: {
           billingOrderId: order.id,
@@ -889,12 +890,14 @@ app.post("/v1/billing/checkout", async (c) => {
   }
 
   const orderId = crypto.randomUUID();
+  const userId = c.get("userId");
   const order = billingStore.createOrder({
     id: orderId,
     provider: "stripe",
     planId: plan.id,
     amountCents: plan.amountCents,
     currency: plan.currency,
+    ownerUserId: userId,
     deploymentInputEncrypted: secretBox!.encryptObject(parsed.data.deployment),
     metadata: {
       ...(parsed.data.metadata ?? {}),
