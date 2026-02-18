@@ -104,6 +104,18 @@ Required API env for Stripe billing:
 - optionally `STRIPE_CHECKOUT_SUCCESS_URL` and `STRIPE_CHECKOUT_CANCEL_URL` as defaults
 
 See `apps/api/.env.example` for full list.
+- Auth can run in token mode (`AUTH_MODE=token`) for local/dev workflows or JWT mode (`AUTH_MODE=jwt`) when using
+  Clerk/WorkOS/any provider-issued bearer token.
+
+WorkOS AuthKit frontend integration is enabled by setting in `apps/web/.env.example`:
+- `VITE_WORKOS_CLIENT_ID`
+- `VITE_WORKOS_REDIRECT_URI` (for example `http://localhost:5173/callback`)
+- `VITE_WORKOS_API_HOSTNAME` (optional; defaults to `api.workos.com`)
+
+For JWT validation in API mode with WorkOS, configure:
+- `AUTH_MODE=jwt`
+- `AUTH_JWKS_URL=https://api.workos.com/sso/jwks/<WORKOS_CLIENT_ID>`
+- `AUTH_JWT_ISSUER=https://api.workos.com/`
 
 Optional Convex mirror env:
 - `CONVEX_SYNC_ENABLED=true`
