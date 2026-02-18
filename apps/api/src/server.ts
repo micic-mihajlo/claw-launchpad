@@ -514,10 +514,16 @@ function isDuplicateBillingRefError(error: unknown): boolean {
 async function queueDeploymentFromPaidOrder(
   orderId: string,
   trigger: "stripe_webhook" | "manual_order_provision",
-  ownerUserId?: string,
+  requestingUserId?: string,
 ) {
   const order = billingStore.getOrderInternal(orderId);
   if (!order) {
+    throw createHttpError(404, "Order not found");
+  }
+
+  const ownerUserId = order.ownerUserId?.trim() || authState.defaultUserId;
+  const normalizedRequestingUserId = requestingUserId?.trim() || "";
+  if (normalizedRequestingUserId && normalizedRequestingUserId !== ownerUserId) {
     throw createHttpError(404, "Order not found");
   }
 
@@ -574,14 +580,13 @@ async function queueDeploymentFromPaidOrder(
   }
 
   try {
-    const resolvedOwnerUserId = ownerUserId?.trim() || order.ownerUserId || authState.defaultUserId;
     const deployment = createDeploymentFromInput(
       {
         ...parsedStoredInput.data,
         billingRef: order.id,
       },
       {
-        ownerUserId: resolvedOwnerUserId,
+        ownerUserId,
         billingRef: order.id,
         metadataOverride: {
           billingOrderId: order.id,
@@ -1015,18 +1020,20 @@ app.post("/v1/webhooks/stripe", async (c) => {
 });
 
 app.get("/v1/orders", (c) => {
+  const userId = c.get("userId");
   const limit = Number.parseInt(String(c.req.query("limit") || "50"), 10);
   const offset = Number.parseInt(String(c.req.query("offset") || "0"), 10);
   const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 200)) : 50;
   const safeOffset = Number.isFinite(offset) ? Math.max(0, offset) : 0;
   return c.json({
     ok: true,
-    orders: billingStore.listOrders(safeLimit, safeOffset),
+    orders: billingStore.listOrdersForOwner(userId, safeLimit, safeOffset),
   });
 });
 
 app.get("/v1/orders/:id", (c) => {
-  const order = billingStore.getOrder(c.req.param("id"));
+  const userId = c.get("userId");
+  const order = billingStore.getOrderForOwner(userId, c.req.param("id"));
   if (!order) {
     return jsonError(c, 404, "Order not found");
   }

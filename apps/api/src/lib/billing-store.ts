@@ -269,8 +269,25 @@ export class BillingStore {
     return row ?? null;
   }
 
+  #getOrderRowForOwner(ownerUserId: string, id: string): BillingOrderRow | null {
+    const row = this.#db
+      .prepare(
+        `
+      SELECT * FROM billing_orders WHERE owner_user_id = ? AND id = ?
+    `,
+      )
+      .get(ownerUserId, id) as BillingOrderRow | undefined;
+    return row ?? null;
+  }
+
   getOrder(id: string): BillingOrderPublic | null {
     const row = this.#getOrderRow(id);
+    if (!row) return null;
+    return this.#toPublic(row);
+  }
+
+  getOrderForOwner(ownerUserId: string, id: string): BillingOrderPublic | null {
+    const row = this.#getOrderRowForOwner(ownerUserId, id);
     if (!row) return null;
     return this.#toPublic(row);
   }
@@ -303,6 +320,20 @@ export class BillingStore {
     `,
       )
       .all(limit, offset) as BillingOrderRow[];
+    return rows.map((row) => this.#toPublic(row));
+  }
+
+  listOrdersForOwner(ownerUserId: string, limit = 50, offset = 0): BillingOrderPublic[] {
+    const rows = this.#db
+      .prepare(
+        `
+      SELECT * FROM billing_orders
+      WHERE owner_user_id = ?
+      ORDER BY created_at DESC
+      LIMIT ? OFFSET ?
+    `,
+      )
+      .all(ownerUserId, limit, offset) as BillingOrderRow[];
     return rows.map((row) => this.#toPublic(row));
   }
 
