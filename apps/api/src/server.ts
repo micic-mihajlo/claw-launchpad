@@ -1,11 +1,12 @@
 import { serve } from "@hono/node-server";
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import { cors } from "hono/cors";
 import { z } from "zod";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { SecretBox } from "./lib/crypto.js";
+import { createAuthState } from "./lib/auth.js";
 import {
   AuthChoice,
   DeploymentConfig,
@@ -81,6 +82,7 @@ const convexSyncEnabled = process.env.CONVEX_SYNC_ENABLED === "true";
 const convexSyncTimeoutMs = Number.parseInt(process.env.CONVEX_SYNC_TIMEOUT_MS || "8000", 10);
 const convexUrl = process.env.CONVEX_URL || "";
 const convexDeployKey = process.env.CONVEX_DEPLOY_KEY || "";
+const authState = createAuthState();
 
 const convexMirror = new ConvexMirrorClient({
   enabled: convexSyncEnabled,
@@ -137,7 +139,8 @@ if (workerEnabled && secretBox && provisionerKeyReady) {
   deploymentsWorker.start();
 }
 
-const app = new Hono();
+type AppVars = { Variables: { userId: string } };
+const app = new Hono<AppVars>();
 
 app.onError((error, c) => {
   console.error("Unhandled API error", error);
@@ -150,11 +153,35 @@ app.use(
   "*",
   cors({
     origin: process.env.WEB_ORIGIN || "http://localhost:5173",
-    allowHeaders: ["content-type"],
+    allowHeaders: ["content-type", "authorization"],
     allowMethods: ["GET", "POST", "OPTIONS"],
     maxAge: 600,
   }),
 );
+
+const requireAuth: MiddlewareHandler<{ Variables: { userId: string } }> = async (c, next) => {
+  if (!authState.enabled) {
+    c.set("userId", authState.defaultUserId);
+    await next();
+    return;
+  }
+
+  if (!authState.ready) {
+    return jsonError(c, 503, "Authentication unavailable", authState.issues);
+  }
+
+  const userId = await authState.resolveUserId(c.req.header("authorization") ?? null);
+  if (!userId) {
+    return jsonError(c, 401, "Unauthorized", "Missing or invalid Authorization bearer token");
+  }
+
+  c.set("userId", userId);
+  await next();
+};
+
+app.use("/v1/connectors/*", requireAuth);
+app.use("/v1/deployments", requireAuth);
+app.use("/v1/deployments/*", requireAuth);
 
 app.get("/health", (c) => c.json({ ok: true }));
 
@@ -165,6 +192,11 @@ app.get("/v1/control-plane/health", (c) => {
     workerEnabled,
     workerRunning: Boolean(deploymentsWorker),
     issues: controlPlaneIssues,
+    auth: {
+      enabled: authState.enabled,
+      ready: authState.ready,
+      issues: authState.issues,
+    },
     convexSync: {
       enabled: convexMirror.enabled,
       ready: convexMirror.ready,
@@ -275,6 +307,7 @@ const deploymentCreateSchema = z.object({
 });
 
 app.post("/v1/deployments", async (c) => {
+  const userId = c.get("userId");
   if (!secretBox) {
     return jsonError(c, 503, "Control plane not configured", controlPlaneIssues);
   }
@@ -356,6 +389,7 @@ app.post("/v1/deployments", async (c) => {
   const deployment = deploymentsStore.createDeployment({
     id: deploymentId,
     provider: "hetzner",
+    ownerUserId: userId,
     name: normalizedName,
     config,
     secretsEncrypted: secretBox.encryptObject(secrets),
@@ -370,18 +404,20 @@ app.post("/v1/deployments", async (c) => {
 });
 
 app.get("/v1/deployments", (c) => {
+  const userId = c.get("userId");
   const limit = Number.parseInt(String(c.req.query("limit") || "50"), 10);
   const offset = Number.parseInt(String(c.req.query("offset") || "0"), 10);
   const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 200)) : 50;
   const safeOffset = Number.isFinite(offset) ? Math.max(0, offset) : 0;
   return c.json({
     ok: true,
-    deployments: deploymentsStore.listPublic(safeLimit, safeOffset),
+    deployments: deploymentsStore.listPublic(userId, safeLimit, safeOffset),
   });
 });
 
 app.get("/v1/deployments/:id", (c) => {
-  const deployment = deploymentsStore.getPublic(c.req.param("id"));
+  const userId = c.get("userId");
+  const deployment = deploymentsStore.getPublicForOwner(userId, c.req.param("id"));
   if (!deployment) {
     return jsonError(c, 404, "Deployment not found");
   }
@@ -394,6 +430,7 @@ app.get("/v1/deployments/:id", (c) => {
 });
 
 app.post("/v1/deployments/:id/cancel", async (c) => {
+  const userId = c.get("userId");
   const body = await c.req.json().catch(() => null);
   const schema = z.object({
     reason: z.string().max(256).optional(),
@@ -403,7 +440,7 @@ app.post("/v1/deployments/:id/cancel", async (c) => {
     return jsonError(c, 400, "Invalid body", parsed.error.flatten());
   }
 
-  const deployment = deploymentsStore.requestCancel(c.req.param("id"), parsed.data.reason);
+  const deployment = deploymentsStore.requestCancel(userId, c.req.param("id"), parsed.data.reason);
   if (!deployment) {
     return jsonError(c, 404, "Deployment not found");
   }
@@ -411,9 +448,10 @@ app.post("/v1/deployments/:id/cancel", async (c) => {
 });
 
 app.post("/v1/deployments/:id/retry", (c) => {
+  const userId = c.get("userId");
   const id = c.req.param("id");
   try {
-    const deployment = deploymentsStore.retryDeployment(id);
+    const deployment = deploymentsStore.retryDeployment(userId, id);
     if (!deployment) {
       return jsonError(c, 404, "Deployment not found");
     }

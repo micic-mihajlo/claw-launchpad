@@ -87,6 +87,7 @@ export class ConvexMirrorClient {
   async syncDeploymentSnapshot(deployment: DeploymentPublic) {
     await this.#callMutation("sync:upsertDeploymentSnapshot", {
       externalDeploymentId: deployment.id,
+      ownerUserId: deployment.ownerUserId,
       provider: deployment.provider,
       name: deployment.name,
       status: deployment.status,

@@ -32,6 +32,7 @@ type DeploymentRow = {
   id: string;
   provider: string;
   name: string;
+  owner_user_id: string;
   status: DeploymentStatus;
   active_task: DeploymentTask;
   config_json: string;
@@ -58,6 +59,7 @@ export type DeploymentPublic = {
   id: string;
   provider: string;
   name: string;
+  ownerUserId: string;
   status: DeploymentStatus;
   activeTask: DeploymentTask;
   config: DeploymentConfig;
@@ -136,6 +138,7 @@ export class DeploymentsStore {
         id TEXT PRIMARY KEY,
         provider TEXT NOT NULL,
         name TEXT NOT NULL,
+        owner_user_id TEXT NOT NULL DEFAULT 'system',
         status TEXT NOT NULL CHECK(status IN ('pending','provisioning','running','failed','canceled')),
         active_task TEXT NULL CHECK(active_task IN ('provision','destroy')),
         config_json TEXT NOT NULL,
@@ -170,8 +173,20 @@ export class DeploymentsStore {
       CREATE INDEX IF NOT EXISTS idx_deployments_status ON deployments(status, active_task, created_at);
       CREATE INDEX IF NOT EXISTS idx_deployments_cancel ON deployments(cancel_requested_at);
       CREATE INDEX IF NOT EXISTS idx_deployments_lease ON deployments(lease_expires_at);
+      CREATE INDEX IF NOT EXISTS idx_deployments_owner_user_id ON deployments(owner_user_id);
       CREATE INDEX IF NOT EXISTS idx_deployment_events_deployment ON deployment_events(deployment_id, id DESC);
     `);
+
+    const columns = this.#db.prepare("PRAGMA table_info(deployments)").all() as Array<{ name: string }>;
+    const hasOwnerUserId = columns.some((column) => column.name === "owner_user_id");
+    if (!hasOwnerUserId) {
+      this.#db.exec(`
+        ALTER TABLE deployments ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT 'system';
+      `);
+      this.#db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_deployments_owner_user_id ON deployments(owner_user_id);
+      `);
+    }
   }
 
   close() {
@@ -236,6 +251,7 @@ export class DeploymentsStore {
       id: row.id,
       provider: row.provider,
       name: row.name,
+      ownerUserId: row.owner_user_id,
       status: row.status,
       activeTask: row.active_task,
       config: parseJson<DeploymentConfig>(row.config_json, {
@@ -298,7 +314,27 @@ export class DeploymentsStore {
     return this.#toPublic(row);
   }
 
-  listPublic(limit = 50, offset = 0): DeploymentPublic[] {
+  getPublicForOwner(ownerUserId: string, id: string): DeploymentPublic | null {
+    const row = this.#getRowForOwner(ownerUserId, id);
+    if (!row) return null;
+    return this.#toPublic(row);
+  }
+
+  listPublic(ownerUserId: string, limit = 50, offset = 0): DeploymentPublic[] {
+    const rows = this.#db
+      .prepare(
+        `
+      SELECT * FROM deployments
+      WHERE owner_user_id = ?
+      ORDER BY created_at DESC
+      LIMIT ? OFFSET ?
+    `,
+      )
+      .all(ownerUserId, limit, offset) as DeploymentRow[];
+    return rows.map((row) => this.#toPublic(row));
+  }
+
+  listPublicAll(limit = 50, offset = 0): DeploymentPublic[] {
     const rows = this.#db
       .prepare(
         `
@@ -309,6 +345,18 @@ export class DeploymentsStore {
       )
       .all(limit, offset) as DeploymentRow[];
     return rows.map((row) => this.#toPublic(row));
+  }
+
+  #getRowForOwner(ownerUserId: string, id: string): DeploymentRow | null {
+    return (
+      (this.#db
+        .prepare(
+          `
+      SELECT * FROM deployments WHERE id = ? AND owner_user_id = ?
+    `,
+        )
+        .get(id, ownerUserId) as DeploymentRow | undefined) ?? null
+    );
   }
 
   listEvents(deploymentId: string, limit = 200): DeploymentEvent[] {
@@ -354,6 +402,7 @@ export class DeploymentsStore {
   createDeployment(input: {
     id: string;
     provider: "hetzner";
+    ownerUserId: string;
     name: string;
     config: DeploymentConfig;
     secretsEncrypted: string;
@@ -363,17 +412,18 @@ export class DeploymentsStore {
     const createdAt = nowIso();
     this.#db
       .prepare(
-        `
+      `
       INSERT INTO deployments (
-        id, provider, name, status, active_task, config_json, secrets_encrypted,
+        id, provider, name, owner_user_id, status, active_task, config_json, secrets_encrypted,
         metadata_json, billing_ref, created_at, updated_at
-      ) VALUES (?, ?, ?, 'pending', NULL, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, 'pending', NULL, ?, ?, ?, ?, ?, ?)
     `,
       )
       .run(
         input.id,
         input.provider,
         input.name,
+        input.ownerUserId,
         JSON.stringify(input.config),
         input.secretsEncrypted,
         input.metadata ? JSON.stringify(input.metadata) : null,
@@ -395,8 +445,8 @@ export class DeploymentsStore {
     return created;
   }
 
-  requestCancel(id: string, reason?: string): DeploymentPublic | null {
-    const existing = this.#getRow(id);
+  requestCancel(ownerUserId: string, id: string, reason?: string): DeploymentPublic | null {
+    const existing = this.#getRowForOwner(ownerUserId, id);
     if (!existing) return null;
 
     if (existing.status === "canceled") {
@@ -411,7 +461,7 @@ export class DeploymentsStore {
     if (existing.status === "pending") {
       const row = this.#db
         .prepare(
-          `
+      `
         UPDATE deployments
         SET
           status = 'canceled',
@@ -422,11 +472,11 @@ export class DeploymentsStore {
           lease_expires_at = NULL,
           completed_at = ?,
           updated_at = ?
-        WHERE id = ?
+        WHERE id = ? AND owner_user_id = ?
         RETURNING *
       `,
         )
-        .get(canceledAt, canceledAt, updatedAt, id) as DeploymentRow | undefined;
+        .get(canceledAt, canceledAt, updatedAt, id, ownerUserId) as DeploymentRow | undefined;
       if (row) {
         this.appendEvent(id, "deployment.canceled", "Deployment canceled before provisioning started", {
           reason: reason ?? "cancel requested",
@@ -440,16 +490,16 @@ export class DeploymentsStore {
 
     const row = this.#db
       .prepare(
-        `
+      `
       UPDATE deployments
       SET
         cancel_requested_at = COALESCE(cancel_requested_at, ?),
         updated_at = ?
-      WHERE id = ? AND status IN ('running', 'provisioning')
+      WHERE id = ? AND owner_user_id = ? AND status IN ('running', 'provisioning')
       RETURNING *
     `,
       )
-      .get(canceledAt, updatedAt, id) as DeploymentRow | undefined;
+      .get(canceledAt, updatedAt, id, ownerUserId) as DeploymentRow | undefined;
     if (!row) {
       return this.getPublic(id);
     }
@@ -463,8 +513,8 @@ export class DeploymentsStore {
     return deployment;
   }
 
-  retryDeployment(id: string): DeploymentPublic | null {
-    const existing = this.#getRow(id);
+  retryDeployment(ownerUserId: string, id: string): DeploymentPublic | null {
+    const existing = this.#getRowForOwner(ownerUserId, id);
     if (!existing) return null;
     if (!["failed", "canceled"].includes(existing.status)) {
       throw new Error("Only failed or canceled deployments can be retried");
@@ -476,7 +526,7 @@ export class DeploymentsStore {
     const updatedAt = nowIso();
     const row = this.#db
       .prepare(
-        `
+      `
       UPDATE deployments
       SET
         status = 'pending',
@@ -490,11 +540,11 @@ export class DeploymentsStore {
         tailnet_url = NULL,
         gateway_token_encrypted = NULL,
         updated_at = ?
-      WHERE id = ?
+      WHERE id = ? AND owner_user_id = ?
       RETURNING *
     `,
       )
-      .get(updatedAt, id) as DeploymentRow | undefined;
+      .get(updatedAt, id, ownerUserId) as DeploymentRow | undefined;
     if (!row) {
       return this.getPublic(id);
     }
