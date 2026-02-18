@@ -557,7 +557,7 @@ export class BillingStore {
         status = ?,
         error_message = ?,
         updated_at = ?
-      WHERE id = ?
+      WHERE id = ? AND status NOT IN ('deployment_created', 'expired', 'canceled')
       RETURNING *
     `,
       )
