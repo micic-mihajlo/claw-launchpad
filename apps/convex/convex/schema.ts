@@ -4,6 +4,7 @@ import { v } from "convex/values";
 export default defineSchema({
   deploymentSnapshots: defineTable({
     externalDeploymentId: v.string(),
+    ownerUserId: v.string(),
     provider: v.string(),
     name: v.string(),
     status: v.string(),
@@ -20,7 +21,9 @@ export default defineSchema({
     startedAt: v.union(v.string(), v.null()),
     completedAt: v.union(v.string(), v.null()),
     syncedAt: v.string(),
-  }).index("by_external_deployment_id", ["externalDeploymentId"]),
+  })
+    .index("by_owner_user_id", ["ownerUserId"])
+    .index("by_external_deployment_id", ["externalDeploymentId"]),
 
   deploymentEvents: defineTable({
     externalDeploymentId: v.string(),
