@@ -1,5 +1,5 @@
 import { serve } from "@hono/node-server";
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import { cors } from "hono/cors";
 import { z } from "zod";
 import crypto from "node:crypto";
@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type Stripe from "stripe";
 import { SecretBox } from "./lib/crypto.js";
+import { createAuthState } from "./lib/auth.js";
 import {
   AuthChoice,
   DeploymentConfig,
@@ -122,7 +123,6 @@ const autoProvisionPaidOrders = process.env.BILLING_AUTO_PROVISION_ON_PAYMENT !=
 const stripeCheckoutSuccessUrlDefault = String(process.env.STRIPE_CHECKOUT_SUCCESS_URL || "").trim();
 const stripeCheckoutCancelUrlDefault = String(process.env.STRIPE_CHECKOUT_CANCEL_URL || "").trim();
 const stripeTimeoutMs = Number.parseInt(process.env.STRIPE_TIMEOUT_MS || "20000", 10);
-const apiBearerToken = String(process.env.API_BEARER_TOKEN || "").trim();
 const provisionerSshPublicKeyPath = process.env.PROVISIONER_SSH_PUBLIC_KEY_PATH || "";
 const provisionerSshPrivateKeyPath = process.env.PROVISIONER_SSH_PRIVATE_KEY_PATH || "";
 const convexSyncEnabled = process.env.CONVEX_SYNC_ENABLED === "true";
@@ -131,6 +131,7 @@ const convexUrl = process.env.CONVEX_URL || "";
 const convexDeployKey = process.env.CONVEX_DEPLOY_KEY || "";
 const { plans: billingPlans, issues: billingPlanIssues } = loadBillingPlans(process.env.BILLING_PLANS_JSON);
 const billingPlansById = plansMap(billingPlans);
+const authState = createAuthState();
 
 const convexMirror = new ConvexMirrorClient({
   enabled: convexSyncEnabled,
@@ -195,7 +196,8 @@ if (workerEnabled && secretBox && provisionerKeyReady) {
   deploymentsWorker.start();
 }
 
-const app = new Hono();
+type AppVars = { Variables: { userId: string } };
+const app = new Hono<AppVars>();
 
 app.onError((error, c) => {
   console.error("Unhandled API error", error);
@@ -214,31 +216,33 @@ app.use(
   }),
 );
 
-app.use("/v1/*", async (c, next) => {
-  if (c.req.path === "/v1/webhooks/stripe") {
+const requireAuth: MiddlewareHandler<{ Variables: { userId: string } }> = async (c, next) => {
+  if (!authState.enabled) {
+    c.set("userId", authState.defaultUserId);
     await next();
     return;
   }
 
-  if (!apiBearerToken) {
-    await next();
-    return;
+  if (!authState.ready) {
+    return jsonError(c, 503, "Authentication unavailable", authState.issues);
   }
 
-  const authorization = String(c.req.header("authorization") || "");
-  const expected = `Bearer ${apiBearerToken}`;
-  const providedBuffer = Buffer.from(authorization);
-  const expectedBuffer = Buffer.from(expected);
-  const authorized =
-    providedBuffer.length === expectedBuffer.length &&
-    crypto.timingSafeEqual(providedBuffer, expectedBuffer);
-
-  if (!authorized) {
+  const userId = await authState.resolveUserId(c.req.header("authorization") ?? null);
+  if (!userId) {
     return jsonError(c, 401, "Unauthorized");
   }
 
+  c.set("userId", userId);
   await next();
-});
+};
+
+app.use("/v1/connectors/*", requireAuth);
+app.use("/v1/billing/*", requireAuth);
+app.use("/v1/deployments", requireAuth);
+app.use("/v1/deployments/*", requireAuth);
+app.use("/v1/orders", requireAuth);
+app.use("/v1/orders/*", requireAuth);
+app.use("/v1/control-plane/health", requireAuth);
 
 app.get("/health", (c) => c.json({ ok: true }));
 
@@ -250,7 +254,9 @@ app.get("/v1/control-plane/health", (c) => {
     workerRunning: Boolean(deploymentsWorker),
     issues: controlPlaneIssues,
     auth: {
-      enabled: Boolean(apiBearerToken),
+      enabled: authState.enabled,
+      ready: authState.ready,
+      issues: authState.issues,
     },
     billing: {
       autoProvisionPaidOrders,
@@ -475,6 +481,7 @@ function createDeploymentFromInput(
   options: {
     billingRef?: string;
     metadataOverride?: Record<string, unknown>;
+    ownerUserId?: string;
   } = {},
 ) {
   assertDeploymentsWritable();
@@ -490,6 +497,7 @@ function createDeploymentFromInput(
   return deploymentsStore.createDeployment({
     id: crypto.randomUUID(),
     provider: "hetzner",
+    ownerUserId: options.ownerUserId || authState.defaultUserId,
     name: normalized.name,
     config: normalized.config,
     secretsEncrypted: secretBox!.encryptObject(normalized.secrets),
@@ -506,9 +514,16 @@ function isDuplicateBillingRefError(error: unknown): boolean {
 async function queueDeploymentFromPaidOrder(
   orderId: string,
   trigger: "stripe_webhook" | "manual_order_provision",
+  requestingUserId?: string,
 ) {
   const order = billingStore.getOrderInternal(orderId);
   if (!order) {
+    throw createHttpError(404, "Order not found");
+  }
+
+  const ownerUserId = order.ownerUserId?.trim() || authState.defaultUserId;
+  const normalizedRequestingUserId = requestingUserId?.trim() || "";
+  if (normalizedRequestingUserId && normalizedRequestingUserId !== ownerUserId) {
     throw createHttpError(404, "Order not found");
   }
 
@@ -571,6 +586,7 @@ async function queueDeploymentFromPaidOrder(
         billingRef: order.id,
       },
       {
+        ownerUserId,
         billingRef: order.id,
         metadataOverride: {
           billingOrderId: order.id,
@@ -770,6 +786,7 @@ async function processStripeEvent(event: Stripe.Event) {
 }
 
 app.post("/v1/deployments", async (c) => {
+  const userId = c.get("userId");
   const body = await c.req.json().catch(() => null);
   const parsed = deploymentCreateSchema.safeParse(body);
   if (!parsed.success) {
@@ -777,7 +794,7 @@ app.post("/v1/deployments", async (c) => {
   }
 
   try {
-    const deployment = createDeploymentFromInput(parsed.data);
+    const deployment = createDeploymentFromInput(parsed.data, { ownerUserId: userId });
     return c.json({
       ok: true,
       deployment,
@@ -878,12 +895,14 @@ app.post("/v1/billing/checkout", async (c) => {
   }
 
   const orderId = crypto.randomUUID();
+  const userId = c.get("userId");
   const order = billingStore.createOrder({
     id: orderId,
     provider: "stripe",
     planId: plan.id,
     amountCents: plan.amountCents,
     currency: plan.currency,
+    ownerUserId: userId,
     deploymentInputEncrypted: secretBox!.encryptObject(parsed.data.deployment),
     metadata: {
       ...(parsed.data.metadata ?? {}),
@@ -1001,18 +1020,20 @@ app.post("/v1/webhooks/stripe", async (c) => {
 });
 
 app.get("/v1/orders", (c) => {
+  const userId = c.get("userId");
   const limit = Number.parseInt(String(c.req.query("limit") || "50"), 10);
   const offset = Number.parseInt(String(c.req.query("offset") || "0"), 10);
   const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 200)) : 50;
   const safeOffset = Number.isFinite(offset) ? Math.max(0, offset) : 0;
   return c.json({
     ok: true,
-    orders: billingStore.listOrders(safeLimit, safeOffset),
+    orders: billingStore.listOrdersForOwner(userId, safeLimit, safeOffset),
   });
 });
 
 app.get("/v1/orders/:id", (c) => {
-  const order = billingStore.getOrder(c.req.param("id"));
+  const userId = c.get("userId");
+  const order = billingStore.getOrderForOwner(userId, c.req.param("id"));
   if (!order) {
     return jsonError(c, 404, "Order not found");
   }
@@ -1028,7 +1049,8 @@ app.get("/v1/orders/:id", (c) => {
 app.post("/v1/orders/:id/provision", async (c) => {
   const orderId = c.req.param("id");
   try {
-    const queued = await queueDeploymentFromPaidOrder(orderId, "manual_order_provision");
+    const userId = c.get("userId");
+    const queued = await queueDeploymentFromPaidOrder(orderId, "manual_order_provision", userId);
     return c.json({
       ok: true,
       order: queued.order,
@@ -1047,18 +1069,20 @@ app.post("/v1/orders/:id/provision", async (c) => {
 });
 
 app.get("/v1/deployments", (c) => {
+  const userId = c.get("userId");
   const limit = Number.parseInt(String(c.req.query("limit") || "50"), 10);
   const offset = Number.parseInt(String(c.req.query("offset") || "0"), 10);
   const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 200)) : 50;
   const safeOffset = Number.isFinite(offset) ? Math.max(0, offset) : 0;
   return c.json({
     ok: true,
-    deployments: deploymentsStore.listPublic(safeLimit, safeOffset),
+    deployments: deploymentsStore.listPublic(userId, safeLimit, safeOffset),
   });
 });
 
 app.get("/v1/deployments/:id", (c) => {
-  const deployment = deploymentsStore.getPublic(c.req.param("id"));
+  const userId = c.get("userId");
+  const deployment = deploymentsStore.getPublicForOwner(userId, c.req.param("id"));
   if (!deployment) {
     return jsonError(c, 404, "Deployment not found");
   }
@@ -1071,6 +1095,7 @@ app.get("/v1/deployments/:id", (c) => {
 });
 
 app.post("/v1/deployments/:id/cancel", async (c) => {
+  const userId = c.get("userId");
   const body = await c.req.json().catch(() => null);
   const schema = z.object({
     reason: z.string().max(256).optional(),
@@ -1080,7 +1105,7 @@ app.post("/v1/deployments/:id/cancel", async (c) => {
     return jsonError(c, 400, "Invalid body", parsed.error.flatten());
   }
 
-  const deployment = deploymentsStore.requestCancel(c.req.param("id"), parsed.data.reason);
+  const deployment = deploymentsStore.requestCancel(userId, c.req.param("id"), parsed.data.reason);
   if (!deployment) {
     return jsonError(c, 404, "Deployment not found");
   }
@@ -1088,9 +1113,10 @@ app.post("/v1/deployments/:id/cancel", async (c) => {
 });
 
 app.post("/v1/deployments/:id/retry", (c) => {
+  const userId = c.get("userId");
   const id = c.req.param("id");
   try {
-    const deployment = deploymentsStore.retryDeployment(id);
+    const deployment = deploymentsStore.retryDeployment(userId, id);
     if (!deployment) {
       return jsonError(c, 404, "Deployment not found");
     }

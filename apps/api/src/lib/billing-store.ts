@@ -19,6 +19,7 @@ type BillingOrderRow = {
   amount_cents: number;
   currency: string;
   deployment_input_encrypted: string;
+  owner_user_id: string;
   metadata_json: string | null;
   stripe_checkout_session_id: string | null;
   stripe_checkout_url: string | null;
@@ -66,6 +67,7 @@ export type BillingOrderPublic = {
   planId: string;
   amountCents: number;
   currency: string;
+  ownerUserId: string;
   metadata: Record<string, unknown>;
   stripeCheckoutSessionId: string | null;
   stripeCheckoutUrl: string | null;
@@ -166,6 +168,7 @@ export class BillingStore {
         amount_cents INTEGER NOT NULL,
         currency TEXT NOT NULL,
         deployment_input_encrypted TEXT NOT NULL,
+        owner_user_id TEXT NOT NULL DEFAULT 'system',
         metadata_json TEXT NULL,
         stripe_checkout_session_id TEXT NULL UNIQUE,
         stripe_checkout_url TEXT NULL,
@@ -211,6 +214,17 @@ export class BillingStore {
       CREATE INDEX IF NOT EXISTS idx_billing_order_events_order ON billing_order_events(order_id, id DESC);
       CREATE INDEX IF NOT EXISTS idx_stripe_webhook_events_status ON stripe_webhook_events(status, updated_at);
     `);
+
+    const columns = this.#db.prepare("PRAGMA table_info(billing_orders)").all() as Array<{ name: string }>;
+    const hasOwnerUserId = columns.some((column) => column.name === "owner_user_id");
+    if (!hasOwnerUserId) {
+      this.#db.exec(`
+        ALTER TABLE billing_orders ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT 'system';
+      `);
+    }
+    this.#db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_billing_orders_owner_user_id ON billing_orders(owner_user_id);
+    `);
   }
 
   #toPublic(row: BillingOrderRow): BillingOrderPublic {
@@ -221,6 +235,7 @@ export class BillingStore {
       planId: row.plan_id,
       amountCents: row.amount_cents,
       currency: row.currency,
+      ownerUserId: row.owner_user_id,
       metadata: parseJson<Record<string, unknown>>(row.metadata_json, {}),
       stripeCheckoutSessionId: row.stripe_checkout_session_id,
       stripeCheckoutUrl: row.stripe_checkout_url,
@@ -254,8 +269,25 @@ export class BillingStore {
     return row ?? null;
   }
 
+  #getOrderRowForOwner(ownerUserId: string, id: string): BillingOrderRow | null {
+    const row = this.#db
+      .prepare(
+        `
+      SELECT * FROM billing_orders WHERE owner_user_id = ? AND id = ?
+    `,
+      )
+      .get(ownerUserId, id) as BillingOrderRow | undefined;
+    return row ?? null;
+  }
+
   getOrder(id: string): BillingOrderPublic | null {
     const row = this.#getOrderRow(id);
+    if (!row) return null;
+    return this.#toPublic(row);
+  }
+
+  getOrderForOwner(ownerUserId: string, id: string): BillingOrderPublic | null {
+    const row = this.#getOrderRowForOwner(ownerUserId, id);
     if (!row) return null;
     return this.#toPublic(row);
   }
@@ -288,6 +320,20 @@ export class BillingStore {
     `,
       )
       .all(limit, offset) as BillingOrderRow[];
+    return rows.map((row) => this.#toPublic(row));
+  }
+
+  listOrdersForOwner(ownerUserId: string, limit = 50, offset = 0): BillingOrderPublic[] {
+    const rows = this.#db
+      .prepare(
+        `
+      SELECT * FROM billing_orders
+      WHERE owner_user_id = ?
+      ORDER BY created_at DESC
+      LIMIT ? OFFSET ?
+    `,
+      )
+      .all(ownerUserId, limit, offset) as BillingOrderRow[];
     return rows.map((row) => this.#toPublic(row));
   }
 
@@ -351,17 +397,19 @@ export class BillingStore {
     planId: string;
     amountCents: number;
     currency: string;
+    ownerUserId?: string;
     deploymentInputEncrypted: string;
     metadata?: Record<string, unknown>;
     customerEmail?: string;
   }): BillingOrderPublic {
     const createdAt = nowIso();
+    const ownerUserId = input.ownerUserId?.trim() || "system";
     this.#db
       .prepare(
         `
       INSERT INTO billing_orders (
-        id, provider, status, plan_id, amount_cents, currency, deployment_input_encrypted, metadata_json, customer_email, created_at, updated_at
-      ) VALUES (?, ?, 'pending_payment', ?, ?, ?, ?, ?, ?, ?, ?)
+        id, provider, status, plan_id, amount_cents, currency, deployment_input_encrypted, owner_user_id, metadata_json, customer_email, created_at, updated_at
+      ) VALUES (?, ?, 'pending_payment', ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
       )
       .run(
@@ -371,6 +419,7 @@ export class BillingStore {
         input.amountCents,
         input.currency,
         input.deploymentInputEncrypted,
+        ownerUserId,
         input.metadata ? JSON.stringify(input.metadata) : null,
         input.customerEmail ?? null,
         createdAt,

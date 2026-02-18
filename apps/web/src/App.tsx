@@ -1,7 +1,12 @@
 import { AnimatePresence, motion } from "framer-motion";
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useAuth } from "@workos-inc/authkit-react";
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE || "http://localhost:8788";
+const AUTH_TOKEN_STORAGE_KEY = "clawpad.apiAuthToken";
+const AUTH_TOKEN_ENV = String((import.meta as any).env?.VITE_AUTH_TOKEN || "").trim();
+const WORKOS_CLIENT_ID = String((import.meta as any).env?.VITE_WORKOS_CLIENT_ID || "").trim();
+const WORKOS_ENABLED = Boolean(WORKOS_CLIENT_ID);
 
 type DiscordTestOk = {
   ok: true;
@@ -14,6 +19,72 @@ type DiscordChannelsOk = {
   ok: true;
   channels: Array<{ id: string; name: string; type: number; parentId: string | null; position: number | null }>;
 };
+
+type ApiFailure = {
+  ok: false;
+  error?: string;
+};
+
+type ApiEnvelope<T> = { ok: true } & T;
+type ApiResponse<T> = ApiEnvelope<T> | ApiFailure;
+
+type ApiAuthTokenResolver = () => Promise<string>;
+
+function initialApiAuthToken(): string {
+  if (typeof window === "undefined") return AUTH_TOKEN_ENV;
+  try {
+    return (
+      window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)?.trim() ||
+      window.sessionStorage.getItem(AUTH_TOKEN_STORAGE_KEY)?.trim() ||
+      AUTH_TOKEN_ENV
+    );
+  } catch {
+    return AUTH_TOKEN_ENV;
+  }
+}
+
+function persistApiAuthToken(token: string): string {
+  const trimmed = token.trim();
+  try {
+    if (trimmed) {
+      window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, trimmed);
+    } else {
+      window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+      window.sessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // no-op: persistence is opportunistic in environments that don't allow storage access
+  }
+  return trimmed;
+}
+
+function buildApiHeaders(apiAuthToken: string, extra: Record<string, string> = {}): Record<string, string> {
+  const headers: Record<string, string> = { ...extra };
+  const token = apiAuthToken.trim();
+  if (token) {
+    headers.authorization = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+async function buildApiHeadersFromResolver(
+  getApiAuthToken: ApiAuthTokenResolver,
+  extra: Record<string, string> = {},
+): Promise<Record<string, string>> {
+  try {
+    const apiAuthToken = await getApiAuthToken();
+    return buildApiHeaders(apiAuthToken, extra);
+  } catch {
+    return buildApiHeaders("", extra);
+  }
+}
+
+function shortToken(token: string): string {
+  const normalized = token.trim();
+  if (!normalized) return "none";
+  if (normalized.length <= 10) return normalized;
+  return `••••${normalized.slice(-6)}`;
+}
 
 function Tile(props: {
   title: string;
@@ -74,7 +145,62 @@ function Modal(props: { open: boolean; title: string; onClose: () => void; child
   );
 }
 
-function DiscordConnector(props: { open: boolean; onClose: () => void }) {
+function AuthModal(props: {
+  open: boolean;
+  token: string;
+  onSave: (token: string) => void;
+  onClear: () => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState(props.token);
+
+  useEffect(() => {
+    if (props.open) setDraft(props.token);
+  }, [props.open, props.token]);
+
+  const trimmed = draft.trim();
+  const canSave = trimmed.length > 0;
+
+  return (
+    <Modal open={props.open} title="Workspace Access Token" onClose={props.onClose}>
+      <div className="field">
+        <label className="label">API bearer token</label>
+        <input
+          className="input"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="Paste token or leave blank to operate without auth"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+        />
+        <div className="hint">
+          The token is sent as <span style={{ fontFamily: "var(--mono)" }}>Authorization: Bearer</span> on protected requests.
+        </div>
+      </div>
+
+      <div className="field">
+        <div className="row">
+          <button className="btn btnPrimary" onClick={() => props.onSave(trimmed)} disabled={!canSave}>
+            Save token
+          </button>
+          <button className="btn" onClick={props.onClear} disabled={!props.token}>
+            Clear token
+          </button>
+        </div>
+        <div className="hint" style={{ marginTop: 10 }}>
+          Stored token: <span style={{ fontFamily: "var(--mono)" }}>{shortToken(props.token)}</span>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function DiscordConnector(props: {
+  open: boolean;
+  getApiAuthToken: ApiAuthTokenResolver;
+  onClose: () => void;
+}) {
   const [token, setToken] = useState("");
   const [testing, setTesting] = useState(false);
   const [testOk, setTestOk] = useState<DiscordTestOk | null>(null);
@@ -95,24 +221,36 @@ function DiscordConnector(props: { open: boolean; onClose: () => void }) {
     if (!guildId.trim()) return null;
     if (selectedIds.length === 0) return null;
 
-    const guilds: any = {
+    const guilds: Record<string, { requireMention: boolean; channels: Record<string, { allow: boolean; requireMention: boolean }> }> = {
       [guildId.trim()]: {
         requireMention,
-        channels: Object.fromEntries(selectedIds.map((id) => [id, { allow: true, requireMention }]))
-      }
+        channels: Object.fromEntries(selectedIds.map((id) => [id, { allow: true, requireMention }])),
+      },
     };
 
     const cfg = {
       channels: {
         discord: {
           groupPolicy: "allowlist",
-          guilds
-        }
-      }
+          guilds,
+        },
+      },
     };
 
     return JSON.stringify(cfg, null, 2);
   }, [testOk, guildId, selectedIds]);
+
+  async function parseResponse<T>(response: Response): Promise<ApiResponse<T>> {
+    const raw = await response.text();
+    if (!raw) {
+      return { ok: false, error: "No response body from API" };
+    }
+    try {
+      return JSON.parse(raw) as ApiResponse<T>;
+    } catch {
+      return { ok: false, error: raw };
+    }
+  }
 
   async function testConnection() {
     setTesting(true);
@@ -122,17 +260,22 @@ function DiscordConnector(props: { open: boolean; onClose: () => void }) {
     setSelected({});
 
     try {
-      const res = await fetch(`${API_BASE}/v1/connectors/discord/test`, {
+      const headers = await buildApiHeadersFromResolver(props.getApiAuthToken, { "content-type": "application/json" });
+      const response = await fetch(`${API_BASE}/v1/connectors/discord/test`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers,
         body: JSON.stringify({ token }),
       });
-      const data = (await res.json()) as any;
-      if (!res.ok || !data?.ok) {
-        setTestErr(data?.error || "Discord token check failed");
+      const payload = await parseResponse<DiscordTestOk>(response);
+      if (!response.ok) {
+        setTestErr((!payload.ok && payload.error) || `Request failed with HTTP ${response.status}`);
         return;
       }
-      setTestOk(data as DiscordTestOk);
+      if (!payload.ok) {
+        setTestErr(payload.error || "Discord token check failed");
+        return;
+      }
+      setTestOk(payload);
     } catch (e) {
       setTestErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -147,22 +290,26 @@ function DiscordConnector(props: { open: boolean; onClose: () => void }) {
     setSelected({});
 
     try {
-      const res = await fetch(`${API_BASE}/v1/connectors/discord/guild-channels`, {
+      const headers = await buildApiHeadersFromResolver(props.getApiAuthToken, { "content-type": "application/json" });
+      const response = await fetch(`${API_BASE}/v1/connectors/discord/guild-channels`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers,
         body: JSON.stringify({ token, guildId }),
       });
-      const data = (await res.json()) as any;
-      if (!res.ok || !data?.ok) {
-        setChannelsErr(data?.error || "Could not list guild channels");
+      const payload = await parseResponse<DiscordChannelsOk>(response);
+      if (!response.ok) {
+        setChannelsErr((!payload.ok && payload.error) || `Request failed with HTTP ${response.status}`);
         return;
       }
-
-      const payload = data as DiscordChannelsOk;
-      setChannels(payload.channels);
+      if (!payload.ok) {
+        setChannelsErr(payload.error || "Could not list guild channels");
+        return;
+      }
+      const data = payload;
+      setChannels(data.channels);
 
       const defaults: Record<string, boolean> = {};
-      for (const ch of payload.channels) {
+      for (const ch of data.channels) {
         if (ch.name === "general") {
           defaults[ch.id] = true;
         }
@@ -205,7 +352,8 @@ function DiscordConnector(props: { open: boolean; onClose: () => void }) {
             <strong>Invite the bot to your server</strong>
           </div>
           <div className="stepText">
-            OAuth2 → URL Generator → scopes: <b>bot</b> + <b>applications.commands</b>. Permissions: View Channels, Send Messages, Read Message History.
+            OAuth2 → URL Generator → scopes: <b>bot</b> + <b>applications.commands</b>. Permissions: View Channels, Send
+            Messages, Read Message History.
           </div>
 
           <div className="stepTitle" style={{ marginTop: 14 }}>
@@ -233,7 +381,9 @@ function DiscordConnector(props: { open: boolean; onClose: () => void }) {
 
             {testOk?.ok ? (
               <div className="kv">
-                <div>Bot: <b>@{testOk.bot.username}</b> (id: {testOk.bot.id})</div>
+                <div>
+                  Bot: <b>@{testOk.bot.username}</b> (id: {testOk.bot.id})
+                </div>
                 <div style={{ marginTop: 6 }} className="row">
                   <button
                     className="btn"
@@ -247,7 +397,9 @@ function DiscordConnector(props: { open: boolean; onClose: () => void }) {
                     Open invite URL
                   </a>
                 </div>
-                <div className="hint">Invite URL is generated from your bot id. If Discord rejects it, use OAuth2 URL Generator in the Portal.</div>
+                <div className="hint">
+                  Invite URL is generated from your bot id. If Discord rejects it, use OAuth2 URL Generator in the Portal.
+                </div>
               </div>
             ) : null}
           </div>
@@ -259,8 +411,8 @@ function DiscordConnector(props: { open: boolean; onClose: () => void }) {
             <strong>Allowlist where it can talk</strong>
           </div>
           <div className="stepText">
-            You chose the safest default: only the channels you allow here will trigger replies.
-            Mention-gating is enabled by default.
+            You chose the safest default: only the channels you allow here will trigger replies. Mention-gating is enabled by
+            default.
           </div>
 
           <div className="field">
@@ -329,7 +481,8 @@ function DiscordConnector(props: { open: boolean; onClose: () => void }) {
             ) : null}
 
             <div className="footerNote">
-              In the full deploy flow, we’ll apply this allowlist via: <span style={{ fontFamily: "var(--mono)" }}>openclaw config set channels.discord.guilds …</span>
+              In the full deploy flow, we’ll apply this allowlist via:{" "}
+              <span style={{ fontFamily: "var(--mono)" }}>openclaw config set channels.discord.guilds …</span>
             </div>
           </div>
         </div>
@@ -338,8 +491,23 @@ function DiscordConnector(props: { open: boolean; onClose: () => void }) {
   );
 }
 
-export function App() {
+function AppManualAuth() {
   const [discordOpen, setDiscordOpen] = useState(false);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [apiAuthToken, setApiAuthToken] = useState(initialApiAuthToken);
+
+  const hasToken = Boolean(apiAuthToken.trim());
+
+  function saveAuthToken(next: string) {
+    const persisted = persistApiAuthToken(next);
+    setApiAuthToken(persisted || AUTH_TOKEN_ENV);
+    setAuthModalOpen(false);
+  }
+
+  function clearAuthToken() {
+    const persisted = persistApiAuthToken("");
+    setApiAuthToken(persisted || AUTH_TOKEN_ENV);
+  }
 
   return (
     <div className="container">
@@ -352,7 +520,10 @@ export function App() {
           </div>
         </div>
         <div className="row">
-          <button className="btn" onClick={() => alert("Auth + billing are next.")}>Sign in</button>
+          <span className="tokenBadge">{hasToken ? `Authenticated: ${shortToken(apiAuthToken)}` : "Unauthenticated"}</span>
+          <button className="btn" onClick={() => setAuthModalOpen(true)}>
+            {hasToken ? "Update token" : "Set access token"}
+          </button>
         </div>
       </div>
 
@@ -366,7 +537,9 @@ export function App() {
             <div className="chips">
               <div className="chip">Discord: allowlist + mention gating</div>
               <div className="chip">Access: Tailscale Serve (no public ports)</div>
-              <div className="chip">Config: driven by <span style={{ fontFamily: "var(--mono)" }}>openclaw onboard</span></div>
+              <div className="chip">
+                Config: driven by <span style={{ fontFamily: "var(--mono)" }}>openclaw onboard</span>
+              </div>
             </div>
           </div>
 
@@ -377,9 +550,9 @@ export function App() {
               </div>
               <div className="panelBody">
                 <div className="tiles">
-                  <Tile title="Claude" meta="Anthropic" desc="Opus 4.6 (recommended)" onClick={() => alert("Model selection UI next.")} />
-                  <Tile title="ChatGPT" meta="OpenAI" desc="GPT-5.2" onClick={() => alert("Model selection UI next.")} />
-                  <Tile title="Gemini" meta="Google" desc="Gemini 3 Flash" onClick={() => alert("Model selection UI next.")} />
+                  <Tile title="Claude" meta="Anthropic" desc="Opus 4.6 (recommended)" soon />
+                  <Tile title="ChatGPT" meta="OpenAI" desc="GPT-5.2" soon />
+                  <Tile title="Gemini" meta="Google" desc="Gemini 3 Flash" soon />
                 </div>
               </div>
             </div>
@@ -406,7 +579,9 @@ export function App() {
                   Next: pick infra (Hetzner), paste a Tailscale auth key, then we provision via OpenClaw’s non-interactive onboarding.
                 </div>
                 <div className="row" style={{ marginTop: 12 }}>
-                  <button className="btn btnPrimary" onClick={() => alert("Provisioning UI + worker next.")}>Start deploy</button>
+                  <button className="btn btnPrimary" disabled>
+                    Start deploy
+                  </button>
                 </div>
               </div>
             </div>
@@ -414,7 +589,159 @@ export function App() {
         </div>
       </div>
 
-      <DiscordConnector open={discordOpen} onClose={() => setDiscordOpen(false)} />
+      <AuthModal
+        open={authModalOpen}
+        token={apiAuthToken}
+        onSave={saveAuthToken}
+        onClear={() => {
+          clearAuthToken();
+          setAuthModalOpen(false);
+        }}
+        onClose={() => setAuthModalOpen(false)}
+      />
+
+      <DiscordConnector open={discordOpen} getApiAuthToken={async () => apiAuthToken.trim()} onClose={() => setDiscordOpen(false)} />
     </div>
   );
+}
+
+function AppWorkosAuth() {
+  const [discordOpen, setDiscordOpen] = useState(false);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [apiAuthToken, setApiAuthToken] = useState(initialApiAuthToken);
+  const { isLoading, user, getAccessToken, signIn, signOut } = useAuth();
+
+  const getApiAuthToken = useCallback<ApiAuthTokenResolver>(async () => {
+    if (user) {
+      try {
+        const token = await getAccessToken();
+        if (token.trim()) {
+          return token.trim();
+        }
+      } catch {
+        // Fallback to manual token if WorkOS token resolution fails or session is not active.
+      }
+    }
+    return apiAuthToken.trim();
+  }, [apiAuthToken, getAccessToken, user]);
+
+  function saveAuthToken(next: string) {
+    const persisted = persistApiAuthToken(next);
+    setApiAuthToken(persisted || AUTH_TOKEN_ENV);
+    setAuthModalOpen(false);
+  }
+
+  function clearAuthToken() {
+    const persisted = persistApiAuthToken("");
+    setApiAuthToken(persisted || AUTH_TOKEN_ENV);
+  }
+
+  const hasManualToken = Boolean(apiAuthToken.trim());
+  const workosEmail = user?.email || user?.id || "signed in user";
+  const authBadge = isLoading ? "WorkOS: checking session" : user ? `WorkOS: ${workosEmail}` : "WorkOS: signed out";
+
+  return (
+    <div className="container">
+      <div className="header">
+        <div className="brand">
+          <div className="logo" />
+          <div className="brandText">
+            <strong>Claw Launchpad</strong>
+            <span>allowlist + tailscale serve by default</span>
+          </div>
+        </div>
+        <div className="row">
+          <span className="tokenBadge">{authBadge}</span>
+          <button className="btn" onClick={() => void (user ? signOut() : signIn())} disabled={isLoading}>
+            {isLoading ? "Checking…" : user ? "Sign out" : "Sign in"}
+          </button>
+          <button className="btn" onClick={() => setAuthModalOpen(true)}>
+            {hasManualToken ? "Update manual token" : "Set manual token"}
+          </button>
+        </div>
+      </div>
+
+      <div className="hero">
+        <div className="heroInner">
+          <div>
+            <h1 className="h1">Deploy OpenClaw in a way that never feels broken.</h1>
+            <div className="sub">
+              Safe defaults, real-time checks, and upstream-compatible provisioning. No guessing why your bot isn&apos;t responding.
+            </div>
+            <div className="chips">
+              <div className="chip">Discord: allowlist + mention gating</div>
+              <div className="chip">Access: Tailscale Serve (no public ports)</div>
+              <div className="chip">
+                Config: driven by <span style={{ fontFamily: "var(--mono)" }}>openclaw onboard</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid">
+            <div className="panel">
+              <div className="panelHeader">
+                <h2>Pick a model</h2>
+              </div>
+              <div className="panelBody">
+                <div className="tiles">
+                  <Tile title="Claude" meta="Anthropic" desc="Opus 4.6 (recommended)" soon />
+                  <Tile title="ChatGPT" meta="OpenAI" desc="GPT-5.2" soon />
+                  <Tile title="Gemini" meta="Google" desc="Gemini 3 Flash" soon />
+                </div>
+              </div>
+            </div>
+
+            <div className="panel">
+              <div className="panelHeader">
+                <h2>Connect a channel</h2>
+              </div>
+              <div className="panelBody">
+                <div className="tiles">
+                  <Tile title="Discord" meta="live" desc="Token test + allowlist builder" onClick={() => setDiscordOpen(true)} />
+                  <Tile title="Telegram" meta="next" desc="BotFather token + allowFrom" soon />
+                  <Tile title="Slack" meta="soon" desc="Bot token + app token + scopes" soon />
+                </div>
+              </div>
+            </div>
+
+            <div className="panel">
+              <div className="panelHeader">
+                <h2>Deploy</h2>
+              </div>
+              <div className="panelBody">
+                <div className="sub" style={{ marginTop: 0 }}>
+                  Next: pick infra (Hetzner), paste a Tailscale auth key, then we provision via OpenClaw&apos;s non-interactive onboarding.
+                </div>
+                <div className="row" style={{ marginTop: 12 }}>
+                  <button className="btn btnPrimary" disabled>
+                    Start deploy
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <AuthModal
+        open={authModalOpen}
+        token={apiAuthToken}
+        onSave={saveAuthToken}
+        onClear={() => {
+          clearAuthToken();
+          setAuthModalOpen(false);
+        }}
+        onClose={() => setAuthModalOpen(false)}
+      />
+
+      <DiscordConnector open={discordOpen} getApiAuthToken={getApiAuthToken} onClose={() => setDiscordOpen(false)} />
+    </div>
+  );
+}
+
+export function App() {
+  if (WORKOS_ENABLED) {
+    return <AppWorkosAuth />;
+  }
+  return <AppManualAuth />;
 }

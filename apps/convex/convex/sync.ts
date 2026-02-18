@@ -3,6 +3,7 @@ import { v } from "convex/values";
 
 const snapshotArgs = {
   externalDeploymentId: v.string(),
+  ownerUserId: v.string(),
   provider: v.string(),
   name: v.string(),
   status: v.string(),

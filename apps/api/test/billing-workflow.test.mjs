@@ -115,12 +115,18 @@ async function stopServer(child) {
   }
 }
 
-async function createContext(t) {
+async function createContext(
+  t,
+  options = {},
+) {
   const tmpRoot = await mkdtemp(path.join(tmpdir(), "clawpad-api-test-"));
   const deploymentsDbPath = path.join(tmpRoot, "deployments.db");
   const billingDbPath = path.join(tmpRoot, "billing.db");
   const sshPubPath = path.join(tmpRoot, "id_ed25519.pub");
-  const apiToken = "test-api-token";
+  const {
+    apiToken = "test-api-token",
+    env: contextEnv = {},
+  } = options;
   const stripeWebhookSecret = "whsec_test_local";
   const deploymentKey = "test-deployment-encryption-key";
   const port = await getFreePort();
@@ -136,6 +142,7 @@ async function createContext(t) {
     cwd: apiDir,
     env: {
       ...process.env,
+      ...contextEnv,
       PORT: String(port),
       API_BEARER_TOKEN: apiToken,
       DEPLOYMENTS_DB_PATH: deploymentsDbPath,
@@ -243,6 +250,33 @@ test("auth protects /v1 routes while Stripe webhook stays signature-based", asyn
     ok: false,
     error: "Missing Stripe-Signature header",
   });
+});
+
+test("control-plane health endpoint requires authentication", async (t) => {
+  const ctx = await createContext(t);
+
+  const noAuth = await fetch(`${ctx.baseUrl}/v1/control-plane/health`);
+  assert.equal(noAuth.status, 401);
+  assert.deepEqual(await noAuth.json(), { ok: false, error: "Unauthorized" });
+
+  const withAuth = await fetch(`${ctx.baseUrl}/v1/control-plane/health`, {
+    headers: authHeaders(ctx.apiToken),
+  });
+  assert.equal(withAuth.status, 200);
+  const body = await withAuth.json();
+  assert.equal(body.ok, true);
+});
+
+test("prototype token names are rejected during auth", async (t) => {
+  const ctx = await createContext(t);
+
+  for (const token of ["constructor", "toString", "valueOf", "hasOwnProperty", "__proto__"]) {
+    const response = await fetch(`${ctx.baseUrl}/v1/orders`, {
+      headers: authHeaders(token),
+    });
+    assert.equal(response.status, 401);
+    assert.deepEqual(await response.json(), { ok: false, error: "Unauthorized" });
+  }
 });
 
 test("checkout.session.completed with unpaid status stays pending until async success", async (t) => {
@@ -525,4 +559,216 @@ test("manual order provisioning is idempotent and never creates duplicate deploy
   const orderAfter = await ctx.getOrder(order.id);
   assert.equal(orderAfter.status, "deployment_created");
   assert.equal(orderAfter.deploymentId, deployments[0].id);
+});
+
+test("manual provisioning assigns deployment to the authenticated user", async (t) => {
+  const ctx = await createContext(t, {
+    apiToken: "user-token-1",
+    env: {
+      AUTH_ENABLED: "true",
+      AUTH_TOKEN_MAP: JSON.stringify({
+        "user-token-1": "tenant-user-1",
+      }),
+      AUTH_DEFAULT_USER_ID: "system",
+    },
+  });
+  const store = ctx.openBillingStore();
+
+  const order = store.createOrder({
+    id: crypto.randomUUID(),
+    provider: "stripe",
+    planId: "hetzner-cx23-launch",
+    amountCents: 4900,
+    currency: "usd",
+    ownerUserId: "tenant-user-1",
+    deploymentInputEncrypted: createEncryptedDeploymentInput(ctx.deploymentKey),
+  });
+
+  const checkoutSessionId = `cs_paid_${crypto.randomUUID().replaceAll("-", "")}`;
+  store.setCheckoutSession(order.id, {
+    checkoutSessionId,
+    checkoutUrl: null,
+  });
+  store.markOrderPaid(order.id, {
+    stripeCheckoutSessionId: checkoutSessionId,
+    customerEmail: "tenant1@example.com",
+  });
+  store.close();
+
+  const provisionResponse = await fetch(`${ctx.baseUrl}/v1/orders/${order.id}/provision`, {
+    method: "POST",
+    headers: authHeaders(ctx.apiToken),
+  });
+  assert.equal(provisionResponse.status, 200);
+  const provisionBody = await provisionResponse.json();
+  assert.equal(provisionBody.ok, true);
+  assert.equal(provisionBody.deployment.ownerUserId, "tenant-user-1");
+
+  const deployments = await ctx.getDeployments();
+  assert.equal(deployments.length, 1);
+  assert.equal(deployments[0].ownerUserId, "tenant-user-1");
+});
+
+test("orders endpoints and manual provisioning are tenant-scoped", async (t) => {
+  const ctx = await createContext(t, {
+    apiToken: "user-token-1",
+    env: {
+      AUTH_ENABLED: "true",
+      AUTH_TOKEN_MAP: JSON.stringify({
+        "user-token-1": "tenant-user-1",
+        "user-token-2": "tenant-user-2",
+      }),
+      AUTH_DEFAULT_USER_ID: "system",
+    },
+  });
+  const store = ctx.openBillingStore();
+
+  const orderTenant1 = store.createOrder({
+    id: crypto.randomUUID(),
+    provider: "stripe",
+    planId: "hetzner-cx23-launch",
+    amountCents: 4900,
+    currency: "usd",
+    ownerUserId: "tenant-user-1",
+    deploymentInputEncrypted: createEncryptedDeploymentInput(ctx.deploymentKey),
+    customerEmail: "tenant1-orders@example.com",
+  });
+
+  const orderTenant2 = store.createOrder({
+    id: crypto.randomUUID(),
+    provider: "stripe",
+    planId: "hetzner-cx23-launch",
+    amountCents: 4900,
+    currency: "usd",
+    ownerUserId: "tenant-user-2",
+    deploymentInputEncrypted: createEncryptedDeploymentInput(ctx.deploymentKey),
+    customerEmail: "tenant2-orders@example.com",
+  });
+  const checkoutSessionId = `cs_paid_${crypto.randomUUID().replaceAll("-", "")}`;
+  store.setCheckoutSession(orderTenant2.id, {
+    checkoutSessionId,
+    checkoutUrl: null,
+  });
+  store.markOrderPaid(orderTenant2.id, {
+    stripeCheckoutSessionId: checkoutSessionId,
+    customerEmail: "tenant2-orders@example.com",
+  });
+  store.close();
+
+  const listTenant1 = await fetch(`${ctx.baseUrl}/v1/orders`, {
+    headers: authHeaders("user-token-1"),
+  });
+  assert.equal(listTenant1.status, 200);
+  const listTenant1Body = await listTenant1.json();
+  assert.equal(listTenant1Body.ok, true);
+  assert.equal(listTenant1Body.orders.length, 1);
+  assert.equal(listTenant1Body.orders[0].id, orderTenant1.id);
+  assert.equal(listTenant1Body.orders[0].ownerUserId, "tenant-user-1");
+
+  const tenant1OrderDetail = await fetch(`${ctx.baseUrl}/v1/orders/${orderTenant1.id}`, {
+    headers: authHeaders("user-token-1"),
+  });
+  assert.equal(tenant1OrderDetail.status, 200);
+  const tenant1OrderDetailBody = await tenant1OrderDetail.json();
+  assert.equal(tenant1OrderDetailBody.ok, true);
+  assert.equal(tenant1OrderDetailBody.order.id, orderTenant1.id);
+  assert.equal(tenant1OrderDetailBody.order.ownerUserId, "tenant-user-1");
+
+  const forbiddenDetail = await fetch(`${ctx.baseUrl}/v1/orders/${orderTenant2.id}`, {
+    headers: authHeaders("user-token-1"),
+  });
+  assert.equal(forbiddenDetail.status, 404);
+  assert.deepEqual(await forbiddenDetail.json(), { ok: false, error: "Order not found" });
+
+  const forbiddenProvision = await fetch(`${ctx.baseUrl}/v1/orders/${orderTenant2.id}/provision`, {
+    method: "POST",
+    headers: authHeaders("user-token-1"),
+  });
+  assert.equal(forbiddenProvision.status, 404);
+  assert.deepEqual(await forbiddenProvision.json(), { ok: false, error: "Order not found" });
+
+  const tenant2Provision = await fetch(`${ctx.baseUrl}/v1/orders/${orderTenant2.id}/provision`, {
+    method: "POST",
+    headers: authHeaders("user-token-2"),
+  });
+  assert.equal(tenant2Provision.status, 200);
+  const tenant2ProvisionBody = await tenant2Provision.json();
+  assert.equal(tenant2ProvisionBody.ok, true);
+  assert.equal(tenant2ProvisionBody.deployment.ownerUserId, "tenant-user-2");
+
+  const tenant1Deployments = await fetch(`${ctx.baseUrl}/v1/deployments`, {
+    headers: authHeaders("user-token-1"),
+  });
+  assert.equal(tenant1Deployments.status, 200);
+  const tenant1DeploymentsBody = await tenant1Deployments.json();
+  assert.equal(tenant1DeploymentsBody.deployments.length, 0);
+
+  const tenant2Deployments = await fetch(`${ctx.baseUrl}/v1/deployments`, {
+    headers: authHeaders("user-token-2"),
+  });
+  assert.equal(tenant2Deployments.status, 200);
+  const tenant2DeploymentsBody = await tenant2Deployments.json();
+  assert.equal(tenant2DeploymentsBody.deployments.length, 1);
+  assert.equal(tenant2DeploymentsBody.deployments[0].ownerUserId, "tenant-user-2");
+});
+
+test("stripe webhook auto-provisioned deployment is owned by checkout user", async (t) => {
+  const ctx = await createContext(t, {
+    apiToken: "user-token-1",
+    env: {
+      AUTH_ENABLED: "true",
+      AUTH_TOKEN_MAP: JSON.stringify({
+        "user-token-1": "tenant-user-1",
+      }),
+      AUTH_DEFAULT_USER_ID: "system",
+    },
+  });
+  const store = ctx.openBillingStore();
+
+  const order = store.createOrder({
+    id: crypto.randomUUID(),
+    provider: "stripe",
+    planId: "hetzner-cx23-launch",
+    amountCents: 4900,
+    currency: "usd",
+    ownerUserId: "tenant-user-1",
+    deploymentInputEncrypted: createEncryptedDeploymentInput(ctx.deploymentKey),
+    customerEmail: "tenant1-webhook@example.com",
+  });
+
+  const checkoutSessionId = `cs_test_${crypto.randomUUID().replaceAll("-", "")}`;
+  store.setCheckoutSession(order.id, {
+    checkoutSessionId,
+    checkoutUrl: `https://checkout.stripe.com/cs/${checkoutSessionId}`,
+  });
+  store.close();
+
+  const payload = {
+    id: checkoutSessionId,
+    object: "checkout.session",
+    client_reference_id: order.id,
+    metadata: { order_id: order.id },
+    payment_status: "paid",
+    payment_intent: `pi_${crypto.randomUUID().replaceAll("-", "")}`,
+    customer: `cus_${crypto.randomUUID().replaceAll("-", "")}`,
+    customer_email: "tenant1-webhook@example.com",
+    customer_details: { email: "tenant1-webhook@example.com" },
+    url: `https://checkout.stripe.com/pay/${checkoutSessionId}`,
+  };
+
+  const { response: webhookResponse } = await postStripeWebhook(
+    ctx.baseUrl,
+    "checkout.session.async_payment_succeeded",
+    payload,
+    ctx.stripeWebhookSecret,
+  );
+  assert.equal(webhookResponse.status, 200);
+  const webhookBody = await webhookResponse.json();
+  assert.equal(webhookBody.ok, true);
+  assert.equal(webhookBody.autoProvision, true);
+  assert.equal(webhookBody.deployment.ownerUserId, "tenant-user-1");
+
+  const deployments = await ctx.getDeployments();
+  assert.equal(deployments.length, 1);
+  assert.equal(deployments[0].ownerUserId, "tenant-user-1");
 });
