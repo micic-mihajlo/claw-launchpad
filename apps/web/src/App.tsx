@@ -71,12 +71,8 @@ async function buildApiHeadersFromResolver(
   getApiAuthToken: ApiAuthTokenResolver,
   extra: Record<string, string> = {},
 ): Promise<Record<string, string>> {
-  try {
-    const apiAuthToken = await getApiAuthToken();
-    return buildApiHeaders(apiAuthToken, extra);
-  } catch {
-    return buildApiHeaders("", extra);
-  }
+  const apiAuthToken = await getApiAuthToken();
+  return buildApiHeaders(apiAuthToken, extra);
 }
 
 function shortToken(token: string): string {
@@ -932,7 +928,7 @@ function LaunchpadShell(props: { auth: ShellAuthConfig }) {
             <div className="panelBody">
               {deployments.status === "error" ? <div className="errorBanner">{deployments.error}</div> : null}
               {deployments.status === "loading" && deployments.data.length === 0 ? <div className="sub">Loading deployments…</div> : null}
-              {deployments.status !== "loading" && deployments.data.length === 0 ? (
+              {deployments.status !== "loading" && deployments.status !== "error" && deployments.data.length === 0 ? (
                 <div className="sub">No deployments yet for this tenant.</div>
               ) : null}
               <div className="listWrap">
@@ -979,7 +975,9 @@ function LaunchpadShell(props: { auth: ShellAuthConfig }) {
           <div className="panelBody">
             {orders.status === "error" ? <div className="errorBanner">{orders.error}</div> : null}
             {orders.status === "loading" && orders.data.length === 0 ? <div className="sub">Loading orders…</div> : null}
-            {orders.status !== "loading" && orders.data.length === 0 ? <div className="sub">No billing orders for this tenant.</div> : null}
+            {orders.status !== "loading" && orders.status !== "error" && orders.data.length === 0 ? (
+              <div className="sub">No billing orders for this tenant.</div>
+            ) : null}
             <div className="listWrap">
               {orders.data.map((order) => (
                 <div key={order.id} className="listItem">
