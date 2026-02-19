@@ -538,15 +538,26 @@ function readInitialRoute(): AppRoute {
     return "overview";
   }
   const pathname = (window.location.pathname || "/").toLowerCase();
-  if (pathname.startsWith("/deployments")) return "deployments";
-  if (pathname.startsWith("/billing") || pathname.startsWith("/orders")) return "billing";
+  if (pathname.startsWith("/app/deployments") || pathname.startsWith("/deployments")) return "deployments";
+  if (pathname.startsWith("/app/billing") || pathname.startsWith("/billing") || pathname.startsWith("/orders")) return "billing";
   return "overview";
 }
 
 function routePath(route: AppRoute): string {
-  if (route === "deployments") return "/deployments";
-  if (route === "billing") return "/billing";
-  return "/";
+  if (route === "deployments") return "/app/deployments";
+  if (route === "billing") return "/app/billing";
+  return "/app";
+}
+
+function isAppPath(pathname: string): boolean {
+  const normalized = pathname.toLowerCase();
+  return (
+    normalized.startsWith("/app") ||
+    normalized.startsWith("/deployments") ||
+    normalized.startsWith("/billing") ||
+    normalized.startsWith("/orders") ||
+    normalized.startsWith("/callback")
+  );
 }
 
 function formatDateTime(value: string | null | undefined): string {
@@ -590,6 +601,227 @@ function statusClass(status: string): string {
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
   return `statusPill status-${normalized}`;
+}
+
+function PublicLanding() {
+  return (
+    <div className="marketingRoot">
+      <header className="marketingHeader">
+        <div className="container marketingHeaderInner">
+          <div className="brand">
+            <div className="logo" />
+            <div className="brandText">
+              <strong>Claw Launchpad</strong>
+              <span>secure AI agent deployment</span>
+            </div>
+          </div>
+          <div className="row">
+            <a className="marketingLink" href="#how">
+              How it works
+            </a>
+            <a className="marketingLink" href="#features">
+              Features
+            </a>
+            <a className="marketingLink" href="#pricing">
+              Pricing
+            </a>
+            <a className="btn btnPrimary" href="/app">
+              Open app
+            </a>
+          </div>
+        </div>
+      </header>
+
+      <section className="container marketingHero">
+        <motion.div
+          className="marketingHeroPanel"
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35, ease: "easeOut" }}
+        >
+          <div>
+            <div className="marketingEyebrow">Deploy AI agents with production safety rails</div>
+            <h1 className="marketingTitle">Launch OpenClaw in minutes. Keep tenancy, auth, and billing clean from day one.</h1>
+            <p className="marketingSubtitle">
+              Built for founders and teams shipping agent products. WorkOS auth, tenant-scoped control plane APIs, and
+              secure channel setup flows out of the box.
+            </p>
+            <div className="row" style={{ marginTop: 16 }}>
+              <a className="btn btnPrimary" href="/app">
+                Start deploying
+              </a>
+              <a className="btn" href="#how">
+                See workflow
+              </a>
+            </div>
+          </div>
+
+          <div className="marketingStatGrid">
+            <div className="marketingStatCard">
+              <strong>WorkOS + API tokens</strong>
+              <span>Flexible auth for teams and local dev.</span>
+            </div>
+            <div className="marketingStatCard">
+              <strong>Tenant-scoped data</strong>
+              <span>Deployments and billing isolated per user.</span>
+            </div>
+            <div className="marketingStatCard">
+              <strong>Secure defaults</strong>
+              <span>Discord allowlists and least-exposure posture.</span>
+            </div>
+          </div>
+        </motion.div>
+      </section>
+
+      <section className="container marketingLogos">
+        <div className="marketingLogoRail">
+          <span>WorkOS</span>
+          <span>Convex</span>
+          <span>Stripe</span>
+          <span>Hetzner</span>
+          <span>Tailscale</span>
+          <span>Discord</span>
+        </div>
+      </section>
+
+      <section className="container marketingSection" id="how">
+        <div className="marketingSectionHead">
+          <h2>How it works</h2>
+          <p>From signup to running agent in three clean steps.</p>
+        </div>
+        <div className="marketingCardGrid marketingCardGrid3">
+          <div className="marketingCard">
+            <b>01</b>
+            <h3>Authenticate</h3>
+            <p>Sign in with WorkOS or local token flow and enter your protected control plane.</p>
+          </div>
+          <div className="marketingCard">
+            <b>02</b>
+            <h3>Configure channels</h3>
+            <p>Use Discord token tests plus allowlist builder to eliminate unsafe defaults.</p>
+          </div>
+          <div className="marketingCard">
+            <b>03</b>
+            <h3>Deploy and bill</h3>
+            <p>Provision from paid orders and monitor tenant-scoped deployments in one place.</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="container marketingSection" id="features">
+        <div className="marketingSectionHead">
+          <h2>Built for production, not demos</h2>
+          <p>The parts that usually break first are already addressed.</p>
+        </div>
+        <div className="marketingCardGrid">
+          <div className="marketingCard">
+            <h3>Auth integrity</h3>
+            <p>Strict token resolution, no silent auth downgrade, and protected route gating.</p>
+          </div>
+          <div className="marketingCard">
+            <h3>Tenant isolation</h3>
+            <p>Order and deployment access scoped by owner identity across API flows.</p>
+          </div>
+          <div className="marketingCard">
+            <h3>Resilient UI state</h3>
+            <p>Race-safe loaders and auth-scope resets prevent stale cross-tenant rendering.</p>
+          </div>
+          <div className="marketingCard">
+            <h3>Billing lifecycle</h3>
+            <p>Stripe webhook handling for async states and idempotent provisioning retries.</p>
+          </div>
+          <div className="marketingCard">
+            <h3>Infra-aware deploys</h3>
+            <p>Designed for Hetzner + Tailscale workflows with operationally safe defaults.</p>
+          </div>
+          <div className="marketingCard">
+            <h3>Operator UX</h3>
+            <p>Fast dashboards for deployments and orders with useful state and timestamps.</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="container marketingSection">
+        <div className="marketingSectionHead">
+          <h2>Security posture</h2>
+          <p>Guardrails that reduce accidental exposure and tenant leakage.</p>
+        </div>
+        <div className="marketingCardGrid marketingCardGrid2">
+          <div className="marketingCard">
+            <h3>Access controls by default</h3>
+            <p>Auth-protected control plane endpoints and tenant-aware reads/writes in critical flows.</p>
+          </div>
+          <div className="marketingCard">
+            <h3>Safer connector onboarding</h3>
+            <p>Discord setup flow encourages allowlist-first operation before full channel activation.</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="container marketingSection" id="pricing">
+        <div className="marketingSectionHead">
+          <h2>Pricing that maps to deployment maturity</h2>
+          <p>Start with one launch environment, scale when you need teams and throughput.</p>
+        </div>
+        <div className="marketingPricingGrid">
+          <div className="marketingPriceCard">
+            <h3>Starter</h3>
+            <strong>$49</strong>
+            <span>/month</span>
+            <p>Single environment, secure defaults, and launch tooling.</p>
+            <a className="btn" href="/app">
+              Get started
+            </a>
+          </div>
+          <div className="marketingPriceCard marketingPriceCardPrimary">
+            <h3>Team</h3>
+            <strong>$129</strong>
+            <span>/month</span>
+            <p>Multi-user ops, stronger access controls, and higher provisioning throughput.</p>
+            <a className="btn btnPrimary" href="/app">
+              Start trial
+            </a>
+          </div>
+          <div className="marketingPriceCard">
+            <h3>Scale</h3>
+            <strong>Custom</strong>
+            <span>annual</span>
+            <p>Custom infra constraints, compliance posture, and guided onboarding.</p>
+            <a className="btn" href="/app">
+              Contact sales
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <section className="container marketingSection">
+        <div className="marketingSectionHead">
+          <h2>FAQ</h2>
+        </div>
+        <div className="marketingFaq">
+          <details>
+            <summary>Can I use this without WorkOS?</summary>
+            <p>Yes. Local/manual token mode works for development and controlled internal deployments.</p>
+          </details>
+          <details>
+            <summary>Does billing data stay tenant-scoped?</summary>
+            <p>Yes. Orders and deployments are scoped by owner identity in the API layer.</p>
+          </details>
+          <details>
+            <summary>Can I start with Discord only?</summary>
+            <p>Yes. Discord is the live connector path today; additional channels can be layered later.</p>
+          </details>
+        </div>
+      </section>
+
+      <section className="container marketingCtaBand">
+        <h2>Ship faster without shipping auth or tenancy mistakes.</h2>
+        <a className="btn btnPrimary" href="/app">
+          Open Launchpad
+        </a>
+      </section>
+    </div>
+  );
 }
 
 function LaunchpadShell(props: { auth: ShellAuthConfig }) {
@@ -1128,6 +1360,22 @@ function AppWorkosAuth() {
 }
 
 export function App() {
+  const [pathname, setPathname] = useState(() => {
+    if (typeof window === "undefined") return "/";
+    return window.location.pathname || "/";
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onPopState = () => setPathname(window.location.pathname || "/");
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  if (!isAppPath(pathname)) {
+    return <PublicLanding />;
+  }
+
   if (WORKOS_ENABLED) {
     return <AppWorkosAuth />;
   }
