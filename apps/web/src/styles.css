@@ -482,3 +482,158 @@ a {
   font-size: 12px;
   line-height: 1.45;
 }
+
+.routeTabs {
+  margin-top: 24px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.routeTab {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(8, 10, 14, 0.62);
+  color: var(--muted);
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, transform 120ms ease;
+}
+
+.routeTab:hover {
+  color: var(--text);
+  border-color: rgba(255, 176, 0, 0.42);
+  transform: translateY(-1px);
+}
+
+.routeTabActive {
+  color: var(--text);
+  border-color: rgba(255, 176, 0, 0.56);
+  background: linear-gradient(180deg, rgba(255, 176, 0, 0.2), rgba(255, 77, 0, 0.08));
+}
+
+.summaryRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--muted);
+  padding: 8px 0;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
+.summaryRow:last-child {
+  border-bottom: 0;
+}
+
+.summaryRow b {
+  color: var(--text);
+  font-family: var(--mono);
+  font-weight: 600;
+  text-align: right;
+}
+
+.dataPanel {
+  min-height: 360px;
+}
+
+.panelHeaderSplit {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .panelHeaderSplit {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+.hintInline {
+  color: var(--muted2);
+  font-size: 12px;
+  font-family: var(--mono);
+}
+
+.errorBanner {
+  margin-bottom: 14px;
+  border: 1px solid rgba(255, 102, 102, 0.45);
+  background: rgba(131, 23, 23, 0.2);
+  color: rgba(255, 195, 195, 0.92);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.listWrap {
+  display: grid;
+  gap: 10px;
+}
+
+.listItem {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(8, 10, 14, 0.52);
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.listTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.listTop strong {
+  font-size: 14px;
+}
+
+.listMeta {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-family: var(--mono);
+}
+
+.statusPill {
+  border-radius: 999px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.2px;
+}
+
+.status-pending,
+.status-pending-payment {
+  border-color: rgba(255, 176, 0, 0.5);
+  background: rgba(255, 176, 0, 0.16);
+  color: rgba(255, 220, 145, 0.95);
+}
+
+.status-provisioning,
+.status-running,
+.status-paid,
+.status-deployment-created {
+  border-color: rgba(95, 224, 159, 0.45);
+  background: rgba(49, 152, 103, 0.18);
+  color: rgba(188, 255, 226, 0.95);
+}
+
+.status-failed,
+.status-canceled,
+.status-cancelled,
+.status-expired {
+  border-color: rgba(255, 102, 102, 0.45);
+  background: rgba(148, 27, 27, 0.22);
+  color: rgba(255, 198, 198, 0.96);
+}

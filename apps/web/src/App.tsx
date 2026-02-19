@@ -491,154 +491,469 @@ function DiscordConnector(props: {
   );
 }
 
-function AppManualAuth() {
-  const [discordOpen, setDiscordOpen] = useState(false);
-  const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [apiAuthToken, setApiAuthToken] = useState(initialApiAuthToken);
+type AppRoute = "overview" | "deployments" | "billing";
 
-  const hasToken = Boolean(apiAuthToken.trim());
+type DeploymentRecord = {
+  id: string;
+  name: string;
+  provider: string;
+  status: string;
+  tailnetUrl: string | null;
+  billingRef: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
 
-  function saveAuthToken(next: string) {
-    const persisted = persistApiAuthToken(next);
-    setApiAuthToken(persisted || AUTH_TOKEN_ENV);
-    setAuthModalOpen(false);
+type BillingOrderRecord = {
+  id: string;
+  status: string;
+  planId: string;
+  amountCents: number;
+  currency: string;
+  customerEmail: string | null;
+  deploymentId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type LoadState<T> = {
+  status: "idle" | "loading" | "ready" | "error";
+  data: T;
+  error: string | null;
+  loadedAt: string | null;
+};
+
+type ShellAuthConfig = {
+  workosEnabled: boolean;
+  userLabel: string | null;
+  loading: boolean;
+  authBadge: string;
+  authActionLabel?: string;
+  onAuthAction?: () => void;
+  authActionDisabled?: boolean;
+  onSignInCta?: () => void;
+  signInCtaDisabled?: boolean;
+  resolveSessionToken?: () => Promise<string>;
+};
+
+function readInitialRoute(): AppRoute {
+  if (typeof window === "undefined") {
+    return "overview";
   }
-
-  function clearAuthToken() {
-    const persisted = persistApiAuthToken("");
-    setApiAuthToken(persisted || AUTH_TOKEN_ENV);
-  }
-
-  return (
-    <div className="container">
-      <div className="header">
-        <div className="brand">
-          <div className="logo" />
-          <div className="brandText">
-            <strong>Claw Launchpad</strong>
-            <span>allowlist + tailscale serve by default</span>
-          </div>
-        </div>
-        <div className="row">
-          <span className="tokenBadge">{hasToken ? `Authenticated: ${shortToken(apiAuthToken)}` : "Unauthenticated"}</span>
-          <button className="btn" onClick={() => setAuthModalOpen(true)}>
-            {hasToken ? "Update token" : "Set access token"}
-          </button>
-        </div>
-      </div>
-
-      <div className="hero">
-        <div className="heroInner">
-          <div>
-            <h1 className="h1">Deploy OpenClaw in a way that never feels broken.</h1>
-            <div className="sub">
-              Safe defaults, real-time checks, and upstream-compatible provisioning. No guessing why your bot isn’t responding.
-            </div>
-            <div className="chips">
-              <div className="chip">Discord: allowlist + mention gating</div>
-              <div className="chip">Access: Tailscale Serve (no public ports)</div>
-              <div className="chip">
-                Config: driven by <span style={{ fontFamily: "var(--mono)" }}>openclaw onboard</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid">
-            <div className="panel">
-              <div className="panelHeader">
-                <h2>Pick a model</h2>
-              </div>
-              <div className="panelBody">
-                <div className="tiles">
-                  <Tile title="Claude" meta="Anthropic" desc="Opus 4.6 (recommended)" soon />
-                  <Tile title="ChatGPT" meta="OpenAI" desc="GPT-5.2" soon />
-                  <Tile title="Gemini" meta="Google" desc="Gemini 3 Flash" soon />
-                </div>
-              </div>
-            </div>
-
-            <div className="panel">
-              <div className="panelHeader">
-                <h2>Connect a channel</h2>
-              </div>
-              <div className="panelBody">
-                <div className="tiles">
-                  <Tile title="Discord" meta="live" desc="Token test + allowlist builder" onClick={() => setDiscordOpen(true)} />
-                  <Tile title="Telegram" meta="next" desc="BotFather token + allowFrom" soon />
-                  <Tile title="Slack" meta="soon" desc="Bot token + app token + scopes" soon />
-                </div>
-              </div>
-            </div>
-
-            <div className="panel">
-              <div className="panelHeader">
-                <h2>Deploy</h2>
-              </div>
-              <div className="panelBody">
-                <div className="sub" style={{ marginTop: 0 }}>
-                  Next: pick infra (Hetzner), paste a Tailscale auth key, then we provision via OpenClaw’s non-interactive onboarding.
-                </div>
-                <div className="row" style={{ marginTop: 12 }}>
-                  <button className="btn btnPrimary" disabled>
-                    Start deploy
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <AuthModal
-        open={authModalOpen}
-        token={apiAuthToken}
-        onSave={saveAuthToken}
-        onClear={() => {
-          clearAuthToken();
-          setAuthModalOpen(false);
-        }}
-        onClose={() => setAuthModalOpen(false)}
-      />
-
-      <DiscordConnector open={discordOpen} getApiAuthToken={async () => apiAuthToken.trim()} onClose={() => setDiscordOpen(false)} />
-    </div>
-  );
+  const pathname = (window.location.pathname || "/").toLowerCase();
+  if (pathname.startsWith("/deployments")) return "deployments";
+  if (pathname.startsWith("/billing") || pathname.startsWith("/orders")) return "billing";
+  return "overview";
 }
 
-function AppWorkosAuth() {
+function routePath(route: AppRoute): string {
+  if (route === "deployments") return "/deployments";
+  if (route === "billing") return "/billing";
+  return "/";
+}
+
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString();
+}
+
+function formatAmount(amountCents: number, currency: string): string {
+  const normalized = String(currency || "usd").toUpperCase();
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: normalized }).format(amountCents / 100);
+  } catch {
+    return `${(amountCents / 100).toFixed(2)} ${normalized}`;
+  }
+}
+
+function compactId(value: string): string {
+  const normalized = value.trim();
+  if (normalized.length <= 14) return normalized;
+  return `${normalized.slice(0, 6)}…${normalized.slice(-6)}`;
+}
+
+async function parseApiResponse<T>(response: Response): Promise<ApiResponse<T>> {
+  const raw = await response.text();
+  if (!raw) return { ok: false, error: "No response body from API" };
+  try {
+    return JSON.parse(raw) as ApiResponse<T>;
+  } catch {
+    return { ok: false, error: raw };
+  }
+}
+
+function statusClass(status: string): string {
+  const normalized = status.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+  return `statusPill status-${normalized}`;
+}
+
+function LaunchpadShell(props: { auth: ShellAuthConfig }) {
+  const { resolveSessionToken, userLabel, workosEnabled, onSignInCta, signInCtaDisabled } = props.auth;
+  const [route, setRoute] = useState<AppRoute>(readInitialRoute);
   const [discordOpen, setDiscordOpen] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [apiAuthToken, setApiAuthToken] = useState(initialApiAuthToken);
-  const { isLoading, user, getAccessToken, signIn, signOut } = useAuth();
+  const [deployments, setDeployments] = useState<LoadState<DeploymentRecord[]>>({
+    status: "idle",
+    data: [],
+    error: null,
+    loadedAt: null,
+  });
+  const [orders, setOrders] = useState<LoadState<BillingOrderRecord[]>>({
+    status: "idle",
+    data: [],
+    error: null,
+    loadedAt: null,
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onPopState = () => {
+      setRoute(readInitialRoute());
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   const getApiAuthToken = useCallback<ApiAuthTokenResolver>(async () => {
-    if (user) {
+    if (userLabel && resolveSessionToken) {
       try {
-        const token = await getAccessToken();
+        const token = await resolveSessionToken();
         if (token.trim()) {
           return token.trim();
         }
       } catch {
-        // Fallback to manual token if WorkOS token resolution fails or session is not active.
+        // Manual token remains a safe fallback for local/dev scenarios.
       }
     }
     return apiAuthToken.trim();
-  }, [apiAuthToken, getAccessToken, user]);
+  }, [apiAuthToken, resolveSessionToken, userLabel]);
 
-  function saveAuthToken(next: string) {
+  const goToRoute = useCallback((next: AppRoute) => {
+    setRoute(next);
+    if (typeof window === "undefined") return;
+    const targetPath = routePath(next);
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState(null, "", targetPath);
+    }
+  }, []);
+
+  const hasManualToken = Boolean(apiAuthToken.trim());
+  const hasWorkosSession = Boolean(userLabel);
+  const protectedAccess = !workosEnabled || hasWorkosSession || hasManualToken;
+
+  const saveAuthToken = useCallback((next: string) => {
     const persisted = persistApiAuthToken(next);
     setApiAuthToken(persisted || AUTH_TOKEN_ENV);
     setAuthModalOpen(false);
-  }
+  }, []);
 
-  function clearAuthToken() {
+  const clearAuthToken = useCallback(() => {
     const persisted = persistApiAuthToken("");
     setApiAuthToken(persisted || AUTH_TOKEN_ENV);
-  }
+  }, []);
 
-  const hasManualToken = Boolean(apiAuthToken.trim());
-  const workosEmail = user?.email || user?.id || "signed in user";
-  const authBadge = isLoading ? "WorkOS: checking session" : user ? `WorkOS: ${workosEmail}` : "WorkOS: signed out";
+  const loadDeployments = useCallback(async () => {
+    setDeployments((prev) => ({ ...prev, status: "loading", error: null }));
+    try {
+      const headers = await buildApiHeadersFromResolver(getApiAuthToken);
+      const response = await fetch(`${API_BASE}/v1/deployments`, { headers });
+      const payload = await parseApiResponse<{ deployments: DeploymentRecord[] }>(response);
+      if (!response.ok || !payload.ok) {
+        setDeployments({
+          status: "error",
+          data: [],
+          error: (!payload.ok && payload.error) || `Request failed with HTTP ${response.status}`,
+          loadedAt: new Date().toISOString(),
+        });
+        return;
+      }
+      setDeployments({
+        status: "ready",
+        data: payload.deployments || [],
+        error: null,
+        loadedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      setDeployments({
+        status: "error",
+        data: [],
+        error: error instanceof Error ? error.message : String(error),
+        loadedAt: new Date().toISOString(),
+      });
+    }
+  }, [getApiAuthToken]);
+
+  const loadOrders = useCallback(async () => {
+    setOrders((prev) => ({ ...prev, status: "loading", error: null }));
+    try {
+      const headers = await buildApiHeadersFromResolver(getApiAuthToken);
+      const response = await fetch(`${API_BASE}/v1/orders`, { headers });
+      const payload = await parseApiResponse<{ orders: BillingOrderRecord[] }>(response);
+      if (!response.ok || !payload.ok) {
+        setOrders({
+          status: "error",
+          data: [],
+          error: (!payload.ok && payload.error) || `Request failed with HTTP ${response.status}`,
+          loadedAt: new Date().toISOString(),
+        });
+        return;
+      }
+      setOrders({
+        status: "ready",
+        data: payload.orders || [],
+        error: null,
+        loadedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      setOrders({
+        status: "error",
+        data: [],
+        error: error instanceof Error ? error.message : String(error),
+        loadedAt: new Date().toISOString(),
+      });
+    }
+  }, [getApiAuthToken]);
+
+  useEffect(() => {
+    if (!protectedAccess) {
+      return;
+    }
+    if (route === "deployments") {
+      void loadDeployments();
+      return;
+    }
+    if (route === "billing") {
+      void loadOrders();
+    }
+  }, [loadDeployments, loadOrders, protectedAccess, route]);
+
+  const pageContent = useMemo(() => {
+    if (route === "overview") {
+      return (
+        <div className="hero">
+          <div className="heroInner">
+            <div>
+              <h1 className="h1">Deploy OpenClaw in a way that never feels broken.</h1>
+              <div className="sub">
+                WorkOS-backed auth, tenant-scoped API data, and an opinionated launch flow for channel setup plus provisioning.
+              </div>
+              <div className="chips">
+                <div className="chip">Route protection for tenant data</div>
+                <div className="chip">Deployments + billing views connected to API</div>
+                <div className="chip">
+                  Default connector path: <span style={{ fontFamily: "var(--mono)" }}>Discord allowlist</span>
+                </div>
+              </div>
+              <div className="row" style={{ marginTop: 18 }}>
+                <button className="btn btnPrimary" onClick={() => goToRoute("deployments")}>
+                  Open deployments
+                </button>
+                <button className="btn" onClick={() => goToRoute("billing")}>
+                  Open billing
+                </button>
+                <button className="btn" onClick={() => setDiscordOpen(true)}>
+                  Configure Discord
+                </button>
+              </div>
+            </div>
+
+            <div className="grid">
+              <div className="panel">
+                <div className="panelHeader">
+                  <h2>Session</h2>
+                </div>
+                <div className="panelBody">
+                  <div className="summaryRow">
+                    <span>Identity</span>
+                    <b>{userLabel || "No WorkOS session"}</b>
+                  </div>
+                  <div className="summaryRow">
+                    <span>Manual token</span>
+                    <b>{hasManualToken ? shortToken(apiAuthToken) : "not set"}</b>
+                  </div>
+                  <div className="summaryRow">
+                    <span>Protected routes</span>
+                    <b>{protectedAccess ? "available" : "sign in required"}</b>
+                  </div>
+                </div>
+              </div>
+
+              <div className="panel">
+                <div className="panelHeader">
+                  <h2>Data Sync</h2>
+                </div>
+                <div className="panelBody">
+                  <div className="summaryRow">
+                    <span>Deployments cache</span>
+                    <b>{deployments.data.length}</b>
+                  </div>
+                  <div className="summaryRow">
+                    <span>Billing cache</span>
+                    <b>{orders.data.length}</b>
+                  </div>
+                  <div className="summaryRow">
+                    <span>Last deployment refresh</span>
+                    <b>{formatDateTime(deployments.loadedAt)}</b>
+                  </div>
+                </div>
+              </div>
+
+              <div className="panel">
+                <div className="panelHeader">
+                  <h2>Connectors</h2>
+                </div>
+                <div className="panelBody">
+                  <div className="tiles">
+                    <Tile title="Discord" meta="live" desc="Token test + allowlist builder" onClick={() => setDiscordOpen(true)} />
+                    <Tile title="Telegram" meta="next" desc="BotFather token + allowFrom" soon />
+                    <Tile title="Slack" meta="soon" desc="Bot token + app token + scopes" soon />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (!protectedAccess) {
+      return (
+        <div className="hero">
+          <div className="panel">
+            <div className="panelHeader">
+              <h2>Protected View</h2>
+            </div>
+            <div className="panelBody">
+              <div className="sub" style={{ marginTop: 0 }}>
+                Sign in with WorkOS or set a manual API token to access tenant-scoped deployments and billing data.
+              </div>
+              <div className="row" style={{ marginTop: 14 }}>
+                {onSignInCta ? (
+                  <button className="btn btnPrimary" onClick={onSignInCta} disabled={signInCtaDisabled}>
+                    {signInCtaDisabled ? "Checking…" : "Sign in with WorkOS"}
+                  </button>
+                ) : null}
+                <button className="btn" onClick={() => setAuthModalOpen(true)}>
+                  Set manual token
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (route === "deployments") {
+      return (
+        <div className="hero">
+          <div className="panel dataPanel">
+            <div className="panelHeader panelHeaderSplit">
+              <h2>Deployments</h2>
+              <div className="row">
+                <span className="hintInline">Updated: {formatDateTime(deployments.loadedAt)}</span>
+                <button className="btn" onClick={() => void loadDeployments()} disabled={deployments.status === "loading"}>
+                  {deployments.status === "loading" ? "Refreshing…" : "Refresh"}
+                </button>
+              </div>
+            </div>
+            <div className="panelBody">
+              {deployments.status === "error" ? <div className="errorBanner">{deployments.error}</div> : null}
+              {deployments.status === "loading" && deployments.data.length === 0 ? <div className="sub">Loading deployments…</div> : null}
+              {deployments.status !== "loading" && deployments.data.length === 0 ? (
+                <div className="sub">No deployments yet for this tenant.</div>
+              ) : null}
+              <div className="listWrap">
+                {deployments.data.map((deployment) => (
+                  <div key={deployment.id} className="listItem">
+                    <div className="listTop">
+                      <strong>{deployment.name}</strong>
+                      <span className={statusClass(deployment.status)}>{deployment.status}</span>
+                    </div>
+                    <div className="listMeta">
+                      <span>id: {compactId(deployment.id)}</span>
+                      <span>provider: {deployment.provider}</span>
+                      <span>billing: {deployment.billingRef ? compactId(deployment.billingRef) : "none"}</span>
+                      <span>updated: {formatDateTime(deployment.updatedAt)}</span>
+                    </div>
+                    {deployment.tailnetUrl ? (
+                      <div className="row" style={{ marginTop: 10 }}>
+                        <a className="btn" href={deployment.tailnetUrl} target="_blank" rel="noreferrer">
+                          Open tailnet URL
+                        </a>
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="hero">
+        <div className="panel dataPanel">
+          <div className="panelHeader panelHeaderSplit">
+            <h2>Billing Orders</h2>
+            <div className="row">
+              <span className="hintInline">Updated: {formatDateTime(orders.loadedAt)}</span>
+              <button className="btn" onClick={() => void loadOrders()} disabled={orders.status === "loading"}>
+                {orders.status === "loading" ? "Refreshing…" : "Refresh"}
+              </button>
+            </div>
+          </div>
+          <div className="panelBody">
+            {orders.status === "error" ? <div className="errorBanner">{orders.error}</div> : null}
+            {orders.status === "loading" && orders.data.length === 0 ? <div className="sub">Loading orders…</div> : null}
+            {orders.status !== "loading" && orders.data.length === 0 ? <div className="sub">No billing orders for this tenant.</div> : null}
+            <div className="listWrap">
+              {orders.data.map((order) => (
+                <div key={order.id} className="listItem">
+                  <div className="listTop">
+                    <strong>{order.planId}</strong>
+                    <span className={statusClass(order.status)}>{order.status}</span>
+                  </div>
+                  <div className="listMeta">
+                    <span>order: {compactId(order.id)}</span>
+                    <span>amount: {formatAmount(order.amountCents, order.currency)}</span>
+                    <span>customer: {order.customerEmail || "n/a"}</span>
+                    <span>updated: {formatDateTime(order.updatedAt)}</span>
+                  </div>
+                  <div className="listMeta" style={{ marginTop: 6 }}>
+                    <span>deployment: {order.deploymentId ? compactId(order.deploymentId) : "not linked"}</span>
+                    <span>created: {formatDateTime(order.createdAt)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }, [
+    apiAuthToken,
+    deployments.data,
+    deployments.error,
+    deployments.loadedAt,
+    deployments.status,
+    goToRoute,
+    hasManualToken,
+    loadDeployments,
+    loadOrders,
+    orders.data,
+    orders.error,
+    orders.loadedAt,
+    orders.status,
+    onSignInCta,
+    signInCtaDisabled,
+    userLabel,
+    protectedAccess,
+    route,
+  ]);
 
   return (
     <div className="container">
@@ -647,81 +962,36 @@ function AppWorkosAuth() {
           <div className="logo" />
           <div className="brandText">
             <strong>Claw Launchpad</strong>
-            <span>allowlist + tailscale serve by default</span>
+            <span>auth-aware product shell</span>
           </div>
         </div>
         <div className="row">
-          <span className="tokenBadge">{authBadge}</span>
-          <button className="btn" onClick={() => void (user ? signOut() : signIn())} disabled={isLoading}>
-            {isLoading ? "Checking…" : user ? "Sign out" : "Sign in"}
-          </button>
+          <span className="tokenBadge">{props.auth.authBadge}</span>
+          <span className="tokenBadge">Manual token: {hasManualToken ? shortToken(apiAuthToken) : "none"}</span>
+          {props.auth.authActionLabel && props.auth.onAuthAction ? (
+            <button className="btn" onClick={props.auth.onAuthAction} disabled={props.auth.authActionDisabled}>
+              {props.auth.authActionLabel}
+            </button>
+          ) : null}
           <button className="btn" onClick={() => setAuthModalOpen(true)}>
             {hasManualToken ? "Update manual token" : "Set manual token"}
           </button>
         </div>
       </div>
 
-      <div className="hero">
-        <div className="heroInner">
-          <div>
-            <h1 className="h1">Deploy OpenClaw in a way that never feels broken.</h1>
-            <div className="sub">
-              Safe defaults, real-time checks, and upstream-compatible provisioning. No guessing why your bot isn&apos;t responding.
-            </div>
-            <div className="chips">
-              <div className="chip">Discord: allowlist + mention gating</div>
-              <div className="chip">Access: Tailscale Serve (no public ports)</div>
-              <div className="chip">
-                Config: driven by <span style={{ fontFamily: "var(--mono)" }}>openclaw onboard</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid">
-            <div className="panel">
-              <div className="panelHeader">
-                <h2>Pick a model</h2>
-              </div>
-              <div className="panelBody">
-                <div className="tiles">
-                  <Tile title="Claude" meta="Anthropic" desc="Opus 4.6 (recommended)" soon />
-                  <Tile title="ChatGPT" meta="OpenAI" desc="GPT-5.2" soon />
-                  <Tile title="Gemini" meta="Google" desc="Gemini 3 Flash" soon />
-                </div>
-              </div>
-            </div>
-
-            <div className="panel">
-              <div className="panelHeader">
-                <h2>Connect a channel</h2>
-              </div>
-              <div className="panelBody">
-                <div className="tiles">
-                  <Tile title="Discord" meta="live" desc="Token test + allowlist builder" onClick={() => setDiscordOpen(true)} />
-                  <Tile title="Telegram" meta="next" desc="BotFather token + allowFrom" soon />
-                  <Tile title="Slack" meta="soon" desc="Bot token + app token + scopes" soon />
-                </div>
-              </div>
-            </div>
-
-            <div className="panel">
-              <div className="panelHeader">
-                <h2>Deploy</h2>
-              </div>
-              <div className="panelBody">
-                <div className="sub" style={{ marginTop: 0 }}>
-                  Next: pick infra (Hetzner), paste a Tailscale auth key, then we provision via OpenClaw&apos;s non-interactive onboarding.
-                </div>
-                <div className="row" style={{ marginTop: 12 }}>
-                  <button className="btn btnPrimary" disabled>
-                    Start deploy
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+      <div className="routeTabs">
+        <button className={`routeTab ${route === "overview" ? "routeTabActive" : ""}`} onClick={() => goToRoute("overview")}>
+          Overview
+        </button>
+        <button className={`routeTab ${route === "deployments" ? "routeTabActive" : ""}`} onClick={() => goToRoute("deployments")}>
+          Deployments
+        </button>
+        <button className={`routeTab ${route === "billing" ? "routeTabActive" : ""}`} onClick={() => goToRoute("billing")}>
+          Billing
+        </button>
       </div>
+
+      {pageContent}
 
       <AuthModal
         open={authModalOpen}
@@ -736,6 +1006,52 @@ function AppWorkosAuth() {
 
       <DiscordConnector open={discordOpen} getApiAuthToken={getApiAuthToken} onClose={() => setDiscordOpen(false)} />
     </div>
+  );
+}
+
+function AppManualAuth() {
+  return (
+    <LaunchpadShell
+      auth={{
+        workosEnabled: false,
+        userLabel: null,
+        loading: false,
+        authBadge: "WorkOS: not configured",
+      }}
+    />
+  );
+}
+
+function AppWorkosAuth() {
+  const { isLoading, user, getAccessToken, signIn, signOut } = useAuth();
+  const userLabel = user?.email || user?.id || null;
+  const authBadge = isLoading ? "WorkOS: checking session" : userLabel ? `WorkOS: ${userLabel}` : "WorkOS: signed out";
+
+  const authActionLabel = isLoading ? "Checking…" : userLabel ? "Sign out" : "Sign in";
+  const onAuthAction = useCallback(() => {
+    void (userLabel ? signOut() : signIn());
+  }, [signIn, signOut, userLabel]);
+
+  const resolveSessionToken = useCallback(async () => {
+    const token = await getAccessToken();
+    return token.trim();
+  }, [getAccessToken]);
+
+  return (
+    <LaunchpadShell
+      auth={{
+        workosEnabled: true,
+        userLabel,
+        loading: isLoading,
+        authBadge,
+        authActionLabel,
+        onAuthAction,
+        authActionDisabled: isLoading,
+        onSignInCta: userLabel ? undefined : () => void signIn(),
+        signInCtaDisabled: isLoading,
+        resolveSessionToken,
+      }}
+    />
   );
 }
 
