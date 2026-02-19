@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@workos-inc/authkit-react";
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE || "http://localhost:8788";
@@ -585,7 +585,13 @@ async function parseApiResponse<T>(response: Response): Promise<ApiResponse<T>> 
 }
 
 function statusClass(status: string): string {
-  const normalized = status.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+  const normalized = status
+    .toLowerCase()
+    .trim()
+    .replace(/_/g, "-")
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
   return `statusPill status-${normalized}`;
 }
 
@@ -607,6 +613,8 @@ function LaunchpadShell(props: { auth: ShellAuthConfig }) {
     error: null,
     loadedAt: null,
   });
+  const deploymentsRequestRef = useRef(0);
+  const ordersRequestRef = useRef(0);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -618,15 +626,15 @@ function LaunchpadShell(props: { auth: ShellAuthConfig }) {
   }, []);
 
   const getApiAuthToken = useCallback<ApiAuthTokenResolver>(async () => {
-    if (userLabel && resolveSessionToken) {
-      try {
-        const token = await resolveSessionToken();
-        if (token.trim()) {
-          return token.trim();
-        }
-      } catch {
-        // Manual token remains a safe fallback for local/dev scenarios.
+    if (userLabel) {
+      if (!resolveSessionToken) {
+        throw new Error("Signed-in WorkOS session has no token resolver configured.");
       }
+      const token = await resolveSessionToken();
+      if (token.trim()) {
+        return token.trim();
+      }
+      throw new Error("Signed-in WorkOS session returned an empty access token.");
     }
     return apiAuthToken.trim();
   }, [apiAuthToken, resolveSessionToken, userLabel]);
@@ -643,6 +651,13 @@ function LaunchpadShell(props: { auth: ShellAuthConfig }) {
   const hasManualToken = Boolean(apiAuthToken.trim());
   const hasWorkosSession = Boolean(userLabel);
   const protectedAccess = !workosEnabled || hasWorkosSession || hasManualToken;
+  const authScopeKey = useMemo(() => {
+    const manualToken = apiAuthToken.trim();
+    if (workosEnabled && hasWorkosSession) {
+      return `workos:${userLabel || ""}`;
+    }
+    return `manual:${manualToken}`;
+  }, [apiAuthToken, hasWorkosSession, userLabel, workosEnabled]);
 
   const saveAuthToken = useCallback((next: string) => {
     const persisted = persistApiAuthToken(next);
@@ -655,12 +670,38 @@ function LaunchpadShell(props: { auth: ShellAuthConfig }) {
     setApiAuthToken(persisted || AUTH_TOKEN_ENV);
   }, []);
 
+  useEffect(() => {
+    deploymentsRequestRef.current += 1;
+    ordersRequestRef.current += 1;
+    setDeployments({
+      status: "idle",
+      data: [],
+      error: null,
+      loadedAt: null,
+    });
+    setOrders({
+      status: "idle",
+      data: [],
+      error: null,
+      loadedAt: null,
+    });
+  }, [authScopeKey]);
+
   const loadDeployments = useCallback(async () => {
-    setDeployments((prev) => ({ ...prev, status: "loading", error: null }));
+    const requestId = ++deploymentsRequestRef.current;
+    setDeployments({
+      status: "loading",
+      data: [],
+      error: null,
+      loadedAt: null,
+    });
     try {
       const headers = await buildApiHeadersFromResolver(getApiAuthToken);
       const response = await fetch(`${API_BASE}/v1/deployments`, { headers });
       const payload = await parseApiResponse<{ deployments: DeploymentRecord[] }>(response);
+      if (requestId !== deploymentsRequestRef.current) {
+        return;
+      }
       if (!response.ok || !payload.ok) {
         setDeployments({
           status: "error",
@@ -677,6 +718,9 @@ function LaunchpadShell(props: { auth: ShellAuthConfig }) {
         loadedAt: new Date().toISOString(),
       });
     } catch (error) {
+      if (requestId !== deploymentsRequestRef.current) {
+        return;
+      }
       setDeployments({
         status: "error",
         data: [],
@@ -687,11 +731,20 @@ function LaunchpadShell(props: { auth: ShellAuthConfig }) {
   }, [getApiAuthToken]);
 
   const loadOrders = useCallback(async () => {
-    setOrders((prev) => ({ ...prev, status: "loading", error: null }));
+    const requestId = ++ordersRequestRef.current;
+    setOrders({
+      status: "loading",
+      data: [],
+      error: null,
+      loadedAt: null,
+    });
     try {
       const headers = await buildApiHeadersFromResolver(getApiAuthToken);
       const response = await fetch(`${API_BASE}/v1/orders`, { headers });
       const payload = await parseApiResponse<{ orders: BillingOrderRecord[] }>(response);
+      if (requestId !== ordersRequestRef.current) {
+        return;
+      }
       if (!response.ok || !payload.ok) {
         setOrders({
           status: "error",
@@ -708,6 +761,9 @@ function LaunchpadShell(props: { auth: ShellAuthConfig }) {
         loadedAt: new Date().toISOString(),
       });
     } catch (error) {
+      if (requestId !== ordersRequestRef.current) {
+        return;
+      }
       setOrders({
         status: "error",
         data: [],
@@ -719,6 +775,20 @@ function LaunchpadShell(props: { auth: ShellAuthConfig }) {
 
   useEffect(() => {
     if (!protectedAccess) {
+      deploymentsRequestRef.current += 1;
+      ordersRequestRef.current += 1;
+      setDeployments({
+        status: "idle",
+        data: [],
+        error: null,
+        loadedAt: null,
+      });
+      setOrders({
+        status: "idle",
+        data: [],
+        error: null,
+        loadedAt: null,
+      });
       return;
     }
     if (route === "deployments") {
