@@ -521,6 +521,7 @@ type LoadState<T> = {
 
 type ShellAuthConfig = {
   workosEnabled: boolean;
+  hasSession: boolean;
   userLabel: string | null;
   loading: boolean;
   authBadge: string;
@@ -592,7 +593,7 @@ function statusClass(status: string): string {
 }
 
 function LaunchpadShell(props: { auth: ShellAuthConfig }) {
-  const { resolveSessionToken, userLabel, workosEnabled, onSignInCta, signInCtaDisabled } = props.auth;
+  const { resolveSessionToken, userLabel, workosEnabled, hasSession, onSignInCta, signInCtaDisabled } = props.auth;
   const [route, setRoute] = useState<AppRoute>(readInitialRoute);
   const [discordOpen, setDiscordOpen] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -622,7 +623,7 @@ function LaunchpadShell(props: { auth: ShellAuthConfig }) {
   }, []);
 
   const getApiAuthToken = useCallback<ApiAuthTokenResolver>(async () => {
-    if (userLabel) {
+    if (hasSession) {
       if (!resolveSessionToken) {
         throw new Error("Signed-in WorkOS session has no token resolver configured.");
       }
@@ -633,7 +634,7 @@ function LaunchpadShell(props: { auth: ShellAuthConfig }) {
       throw new Error("Signed-in WorkOS session returned an empty access token.");
     }
     return apiAuthToken.trim();
-  }, [apiAuthToken, resolveSessionToken, userLabel]);
+  }, [apiAuthToken, hasSession, resolveSessionToken]);
 
   const goToRoute = useCallback((next: AppRoute) => {
     setRoute(next);
@@ -645,7 +646,7 @@ function LaunchpadShell(props: { auth: ShellAuthConfig }) {
   }, []);
 
   const hasManualToken = Boolean(apiAuthToken.trim());
-  const hasWorkosSession = Boolean(userLabel);
+  const hasWorkosSession = hasSession;
   const protectedAccess = !workosEnabled || hasWorkosSession || hasManualToken;
   const authScopeKey = useMemo(() => {
     const manualToken = apiAuthToken.trim();
@@ -1082,6 +1083,7 @@ function AppManualAuth() {
     <LaunchpadShell
       auth={{
         workosEnabled: false,
+        hasSession: false,
         userLabel: null,
         loading: false,
         authBadge: "WorkOS: not configured",
@@ -1092,13 +1094,14 @@ function AppManualAuth() {
 
 function AppWorkosAuth() {
   const { isLoading, user, getAccessToken, signIn, signOut } = useAuth();
-  const userLabel = user?.email || user?.id || null;
-  const authBadge = isLoading ? "WorkOS: checking session" : userLabel ? `WorkOS: ${userLabel}` : "WorkOS: signed out";
+  const hasSession = Boolean(user);
+  const userLabel = user?.email || user?.id || (hasSession ? "signed in user" : null);
+  const authBadge = isLoading ? "WorkOS: checking session" : hasSession ? `WorkOS: ${userLabel}` : "WorkOS: signed out";
 
-  const authActionLabel = isLoading ? "Checking…" : userLabel ? "Sign out" : "Sign in";
+  const authActionLabel = isLoading ? "Checking…" : hasSession ? "Sign out" : "Sign in";
   const onAuthAction = useCallback(() => {
-    void (userLabel ? signOut() : signIn());
-  }, [signIn, signOut, userLabel]);
+    void (hasSession ? signOut() : signIn());
+  }, [hasSession, signIn, signOut]);
 
   const resolveSessionToken = useCallback(async () => {
     const token = await getAccessToken();
@@ -1109,13 +1112,14 @@ function AppWorkosAuth() {
     <LaunchpadShell
       auth={{
         workosEnabled: true,
+        hasSession,
         userLabel,
         loading: isLoading,
         authBadge,
         authActionLabel,
         onAuthAction,
         authActionDisabled: isLoading,
-        onSignInCta: userLabel ? undefined : () => void signIn(),
+        onSignInCta: hasSession ? undefined : () => void signIn(),
         signInCtaDisabled: isLoading,
         resolveSessionToken,
       }}
