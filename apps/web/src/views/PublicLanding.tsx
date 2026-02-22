@@ -1,32 +1,39 @@
-import type { LandingAuthConfig } from "../app/types";
-import { LandingCtaSection } from "./landing/LandingCtaSection";
-import { LandingControlsSection } from "./landing/LandingControlsSection";
-import { LandingFaqSection } from "./landing/LandingFaqSection";
-import { LandingHeader } from "./landing/LandingHeader";
-import { LandingHero } from "./landing/LandingHero";
-import { LandingPricingSection } from "./landing/LandingPricingSection";
-import { LandingProofSection } from "./landing/LandingProofSection";
-import { LandingWorkflowSection } from "./landing/LandingWorkflowSection";
+import { HeroSection } from "@/components/sections/hero-section";
+import { CompanyShowcase } from "@/components/sections/company-showcase";
+import { Navbar } from "@/components/sections/navbar";
+import { BentoSection } from "@/components/sections/bento-section";
+import { QuoteSection } from "@/components/sections/quote-section";
+import { BasicsSection } from "@/components/sections/basics-section";
+import { FeatureSection } from "@/components/sections/feature-section";
+import { GrowthSection } from "@/components/sections/growth-section";
+import { PricingSection } from "@/components/sections/pricing-section";
+import { TestimonialSection } from "@/components/sections/testimonial-section";
+import { FAQSection } from "@/components/sections/faq-section";
+import { CTASection } from "@/components/sections/cta-section";
+import { FooterSection } from "@/components/sections/footer-section";
 
-export function PublicLanding(props: { auth?: LandingAuthConfig }) {
+export function PublicLanding() {
   return (
-    <div className="landingRoot">
-      <div className="landingBackdrop" />
-      <LandingHeader auth={props.auth} />
-      <LandingHero auth={props.auth} onOpenApp={() => window.location.assign("/app")} onSignIn={props.auth?.onSignIn} />
-      <div className="landingBody">
-        <LandingWorkflowSection />
-        <LandingControlsSection />
-        <LandingProofSection />
-        <LandingPricingSection />
-        <LandingFaqSection />
-        <LandingCtaSection onOpenApp={() => window.location.assign("/app")} />
+    <>
+      <div className="max-w-7xl mx-auto border-x relative">
+        <div className="block w-px h-full border-l border-border absolute top-0 left-6 z-10"></div>
+        <div className="block w-px h-full border-r border-border absolute top-0 right-6 z-10"></div>
+        <Navbar />
+        <main className="flex flex-col items-center justify-center divide-y divide-border min-h-screen w-full">
+          <HeroSection />
+          <CompanyShowcase />
+          <BentoSection />
+          <QuoteSection />
+          <BasicsSection />
+          <FeatureSection />
+          <GrowthSection />
+          <PricingSection />
+          <TestimonialSection />
+          <FAQSection />
+          <CTASection />
+          <FooterSection />
+        </main>
       </div>
-
-      <footer className="landingShell landingFooter">
-        <span>© {new Date().getFullYear()} Claw Launchpad</span>
-        <span>From checkout to endpoint, ownership-aware by design.</span>
-      </footer>
-    </div>
+    </>
   );
 }
