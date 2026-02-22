@@ -760,7 +760,7 @@ export const siteConfig = {
         description:
           "Full deployment, no travel required. We configure, harden, and hand off your agent stack from anywhere in the world.",
         buttonText: "Book Remote Deployment",
-        buttonColor: "bg-accent text-primary",
+        buttonColor: "bg-primary text-primary-foreground",
         isPopular: false,
       },
       {

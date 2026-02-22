@@ -13,13 +13,26 @@ type PricingItem = (typeof siteConfig.pricing.pricingItems)[0] & {
 
 type Tab = "setup" | "retainer";
 
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+function parseDollars(v: string): number {
+  return parseFloat(v.replace(/[^0-9.]/g, "")) || 0;
+}
+
+function getSavingsPct(founding: string, standard: string): number {
+  const f = parseDollars(founding);
+  const s = parseDollars(standard);
+  if (!f || !s || f >= s) return 0;
+  return Math.round((1 - f / s) * 100);
+}
+
 // ── Icons ──────────────────────────────────────────────────────────────────
 
 function RemoteIcon() {
   return (
     <svg
-      width="18"
-      height="18"
+      width="19"
+      height="19"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -38,8 +51,8 @@ function RemoteIcon() {
 function OnSiteIcon() {
   return (
     <svg
-      width="18"
-      height="18"
+      width="19"
+      height="19"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -57,8 +70,8 @@ function OnSiteIcon() {
 function RetainerIcon() {
   return (
     <svg
-      width="18"
-      height="18"
+      width="19"
+      height="19"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -72,55 +85,29 @@ function RetainerIcon() {
   );
 }
 
-// ── Shared primitives ──────────────────────────────────────────────────────
-
-function CheckIcon({ popular }: { popular: boolean }) {
+// Single-path check — no circle wrapper, secondary color
+function FeatureCheck() {
   return (
-    <div
-      className={cn(
-        "size-5 rounded-full border border-primary/20 flex items-center justify-center shrink-0 mt-0.5",
-        popular && "bg-muted-foreground/40 border-border",
-      )}
+    <svg
+      width="13"
+      height="10"
+      viewBox="0 0 13 10"
+      fill="none"
+      className="shrink-0 mt-[3px] text-secondary"
+      aria-hidden="true"
     >
-      <div className="size-3 flex items-center justify-center">
-        <svg
-          width="8"
-          height="7"
-          viewBox="0 0 8 7"
-          fill="none"
-          className="block dark:hidden"
-          aria-hidden="true"
-        >
-          <path
-            d="M1.5 3.48828L3.375 5.36328L6.5 0.988281"
-            stroke="#101828"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-        <svg
-          width="8"
-          height="7"
-          viewBox="0 0 8 7"
-          fill="none"
-          className="hidden dark:block"
-          aria-hidden="true"
-        >
-          <path
-            d="M1.5 3.48828L3.375 5.36328L6.5 0.988281"
-            stroke="#FAFAFA"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </div>
-    </div>
+      <path
+        d="M1.5 5L5 8.5L11.5 1.5"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
-// ── Pricing card ───────────────────────────────────────────────────────────
+// ── Tier metadata ──────────────────────────────────────────────────────────
 
 const TIER_META: Record<string, { icon: React.ReactNode; label: string }> = {
   "Remote Implementation": {
@@ -137,6 +124,8 @@ const TIER_META: Record<string, { icon: React.ReactNode; label: string }> = {
   },
 };
 
+// ── Pricing card ───────────────────────────────────────────────────────────
+
 function PricingCard({
   tier,
   delay = 0,
@@ -149,110 +138,142 @@ function PricingCard({
   const meta = TIER_META[tier.name] ?? { icon: null, label: tier.name };
   const foundingPrice = tier.launchOfferPrice ?? tier.price;
   const hasDiscount = !!(tier.launchOfferPrice && tier.standardPrice);
+  const pct = hasDiscount
+    ? getSavingsPct(tier.launchOfferPrice!, tier.standardPrice!)
+    : 0;
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 16 }}
+      initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35, delay, ease: [0.4, 0, 0.2, 1] }}
+      transition={{ duration: 0.38, delay, ease: [0.25, 0.1, 0.25, 1] }}
       className={cn(
-        "rounded-3xl flex flex-col relative overflow-hidden transition-all duration-300 p-5",
+        "rounded-2xl flex flex-col relative overflow-hidden transition-all duration-300",
         tier.isPopular
-          ? "bg-accent ring-2 ring-secondary/35 shadow-[0px_20px_48px_-12px_rgba(0,0,0,0.14)] hover:-translate-y-2 hover:shadow-[0px_32px_64px_-12px_rgba(0,0,0,0.20)]"
-          : "bg-[#F3F4F6] dark:bg-[#F9FAFB]/[0.02] border border-border/70 hover:-translate-y-1 hover:shadow-[0_16px_40px_-12px_rgba(0,0,0,0.10)]",
+          ? [
+              "bg-[#f8fbff] dark:bg-[#161b28]",
+              "shadow-[0_0_0_1.5px_rgba(43,127,255,0.4),0_20px_56px_-12px_rgba(43,127,255,0.12),0_4px_16px_-4px_rgba(43,127,255,0.08)]",
+              "hover:-translate-y-1.5",
+              "hover:shadow-[0_0_0_1.5px_rgba(43,127,255,0.55),0_32px_72px_-12px_rgba(43,127,255,0.20),0_6px_24px_-4px_rgba(43,127,255,0.12)]",
+            ].join(" ")
+          : [
+              "bg-white dark:bg-[#1c1c20]",
+              "border border-black/[0.07] dark:border-white/[0.07]",
+              "shadow-[0_1px_4px_0_rgba(0,0,0,0.05),0_1px_2px_-1px_rgba(0,0,0,0.04)]",
+              "hover:-translate-y-1",
+              "hover:shadow-[0_8px_40px_-8px_rgba(0,0,0,0.10),0_2px_8px_-2px_rgba(0,0,0,0.06)]",
+            ].join(" "),
       )}
     >
-      {/* Ambient highlight */}
-      <div className="absolute inset-0 pointer-events-none opacity-[0.06] bg-[radial-gradient(circle_at_70%_20%,white_0%,transparent_60%)]" />
+      {/* Popular: vivid top gradient line */}
       {tier.isPopular && (
-        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-secondary/65 to-transparent" />
+        <div className="h-[1.5px] bg-gradient-to-r from-secondary/10 via-secondary to-secondary/10" />
       )}
 
-      {/* ── Card header: icon + name/price ── */}
-      <div className="flex items-start gap-3.5 mb-4 relative z-10">
-        <div className="size-10 rounded-2xl bg-primary/[0.07] dark:bg-white/[0.07] flex items-center justify-center text-foreground/60 shrink-0 mt-0.5">
-          {meta.icon}
-        </div>
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center justify-between gap-2 mb-1">
-            <p className="text-base font-semibold tracking-tight leading-none">
+      <div className="flex flex-col p-6 flex-1">
+        {/* ── Header: icon + label + recommended ── */}
+        <div className="flex items-center justify-between gap-3 mb-6">
+          <div className="flex items-center gap-3">
+            <div
+              className={cn(
+                "size-10 rounded-xl flex items-center justify-center shrink-0",
+                tier.isPopular
+                  ? "bg-secondary/[0.12] dark:bg-secondary/[0.18] text-secondary"
+                  : "bg-black/[0.055] dark:bg-white/[0.07] text-foreground/50",
+              )}
+            >
+              {meta.icon}
+            </div>
+            <p className="text-[15px] font-semibold tracking-[-0.01em] text-foreground">
               {meta.label}
             </p>
-            {tier.isPopular && (
-              <span className="bg-gradient-to-b from-secondary/50 from-[1.92%] to-secondary to-[100%] text-white h-5 inline-flex shrink-0 items-center px-2.5 rounded-full text-[10px] font-semibold tracking-wide shadow-[0px_0px_0px_1px_rgba(255,255,255,0.14)_inset]">
-                Recommended
-              </span>
-            )}
           </div>
+          {tier.isPopular && (
+            <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-secondary bg-secondary/[0.10] dark:bg-secondary/[0.15] px-2.5 py-[5px] rounded-full shrink-0">
+              Recommended
+            </span>
+          )}
+        </div>
 
-          {/* Price row */}
-          <div className="flex items-baseline gap-2 flex-wrap">
+        {/* ── Price block ── */}
+        <div className="mb-6">
+          <div className="flex items-end gap-3 flex-wrap mb-1">
             <motion.span
-              className="text-[2rem] font-bold leading-none tracking-tighter tabular-nums"
-              initial={{ opacity: 0, filter: "blur(4px)" }}
+              className="text-[3.25rem] font-black leading-none tracking-[-0.04em] tabular-nums"
+              initial={{ opacity: 0, filter: "blur(8px)" }}
               animate={{ opacity: 1, filter: "blur(0px)" }}
-              transition={{ duration: 0.25, delay: delay + 0.1 }}
+              transition={{ duration: 0.32, delay: delay + 0.1 }}
             >
               {formatPrice(foundingPrice)}
             </motion.span>
             {hasDiscount && (
-              <span className="text-sm text-muted-foreground line-through opacity-45 tabular-nums font-medium pb-0.5">
-                {formatPrice(tier.standardPrice!)}
-              </span>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[15px] text-muted-foreground/40 line-through tabular-nums font-medium">
+                  {formatPrice(tier.standardPrice!)}
+                </span>
+                {pct > 0 && (
+                  <span className="text-[11px] font-bold text-secondary bg-secondary/[0.10] dark:bg-secondary/[0.18] px-2 py-[3px] rounded-full">
+                    Save {pct}%
+                  </span>
+                )}
+              </div>
             )}
           </div>
           {hasDiscount && (
-            <p className="text-[11px] text-muted-foreground/45 mt-0.5">
-              {formatPrice(tier.standardPrice!)} after launch window
+            <p className="text-[11px] text-muted-foreground/35 mt-0.5 tracking-tight">
+              {formatPrice(tier.standardPrice!)} standard after launch window
             </p>
           )}
         </div>
-      </div>
 
-      {/* ── Description ── */}
-      <p className="text-[13px] text-muted-foreground leading-relaxed mb-4 relative z-10">
-        {tier.description}
-      </p>
+        {/* ── Thin rule ── */}
+        <div className="h-px bg-black/[0.06] dark:bg-white/[0.06] mb-5" />
 
-      {/* ── Features — flex-1 keeps CTA pinned to bottom ── */}
-      <ul className="space-y-2 flex-1 mb-5 relative z-10">
-        {tier.features.map((feature) => (
-          <li key={feature} className="flex items-start gap-2.5">
-            <CheckIcon popular={tier.isPopular} />
-            <span className="text-sm leading-snug">{feature}</span>
-          </li>
-        ))}
-      </ul>
+        {/* ── Description ── */}
+        <p className="text-[13px] text-muted-foreground/80 leading-relaxed mb-5">
+          {tier.description}
+        </p>
 
-      {/* ── Founding badge + CTA ── */}
-      <div className="flex flex-col gap-2.5 relative z-10">
-        <div className="flex items-center gap-2">
-          <span className="inline-flex items-center gap-1.5 px-2 py-[3px] rounded-md bg-secondary/[0.09] dark:bg-secondary/20 border border-secondary/20 dark:border-secondary/30 text-secondary text-[10px] font-bold uppercase tracking-[0.18em]">
+        {/* ── Features — flex-1 pins CTA to bottom ── */}
+        <ul className="flex flex-col gap-[11px] flex-1 mb-6">
+          {tier.features.map((feature) => (
+            <li key={feature} className="flex items-start gap-2.5">
+              <FeatureCheck />
+              <span className="text-[13px] text-foreground/70 leading-snug">
+                {feature}
+              </span>
+            </li>
+          ))}
+        </ul>
+
+        {/* ── CTA ── */}
+        <div className="flex flex-col gap-2.5">
+          <button
+            className={cn(
+              "h-11 w-full flex items-center justify-center text-[13px] font-semibold tracking-tight rounded-full px-4 cursor-pointer transition-all duration-200 active:scale-[0.98]",
+              tier.isPopular
+                ? `${tier.buttonColor} shadow-[0_6px_20px_-4px_rgba(43,127,255,0.45)] hover:shadow-[0_10px_28px_-4px_rgba(43,127,255,0.55)] hover:-translate-y-0.5`
+                : `${tier.buttonColor} shadow-[0_1px_3px_0_rgba(0,0,0,0.12),0_1px_2px_-1px_rgba(0,0,0,0.08)] hover:-translate-y-0.5 hover:shadow-[0_4px_12px_-2px_rgba(0,0,0,0.14)]`,
+            )}
+          >
+            {tier.buttonText}
+          </button>
+
+          {/* Founding whisper */}
+          <p className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground/38 tracking-tight">
             <svg
-              width="7"
-              height="7"
+              width="8"
+              height="8"
               viewBox="0 0 8 8"
               fill="currentColor"
+              className="text-secondary/50"
               aria-hidden="true"
             >
               <path d="M4 0L5 3H8L5.5 5L6.5 8L4 6L1.5 8L2.5 5L0 3H3L4 0Z" />
             </svg>
-            Founding offer
-          </span>
-          <span className="text-[11px] text-muted-foreground/50">5 spots</span>
+            Founding offer · 5 spots remaining
+          </p>
         </div>
-
-        <button
-          className={cn(
-            "h-10 w-full flex items-center justify-center text-sm font-medium tracking-wide rounded-full px-4 cursor-pointer transition-all ease-out active:scale-[0.97]",
-            tier.isPopular
-              ? `${tier.buttonColor} shadow-[0_10px_24px_-8px_rgba(43,127,255,0.50)] hover:-translate-y-0.5 duration-200`
-              : `${tier.buttonColor} shadow-[0px_1px_2px_0px_rgba(255,255,255,0.16)_inset,0px_3px_3px_-1.5px_rgba(16,24,40,0.22),0px_1px_1px_-0.5px_rgba(16,24,40,0.18)]`,
-          )}
-        >
-          {tier.buttonText}
-        </button>
       </div>
     </motion.div>
   );
@@ -291,50 +312,61 @@ export function PricingSection() {
         </p>
       </SectionHeader>
 
-      <div className="flex flex-col items-center gap-5">
-        {/* Tab switcher */}
-        <div className="flex items-center gap-1 p-1 rounded-full bg-muted/60 dark:bg-white/[0.04] border border-border/60">
+      <div className="flex flex-col items-center gap-4">
+        {/* Spring-animated tab switcher */}
+        <div className="flex items-center gap-0.5 p-1 rounded-full bg-black/[0.04] dark:bg-white/[0.04] border border-black/[0.07] dark:border-white/[0.07]">
           {tabs.map(({ id, label }) => (
             <button
               key={id}
               onClick={() => setActiveTab(id)}
-              className={cn(
-                "px-5 py-1.5 rounded-full text-sm font-medium transition-all duration-200 cursor-pointer",
-                activeTab === id
-                  ? "bg-primary text-primary-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
+              className="relative px-5 py-2 rounded-full text-sm font-medium cursor-pointer select-none"
             >
-              {label}
+              {activeTab === id && (
+                <motion.div
+                  layoutId="tab-pill"
+                  className="absolute inset-0 rounded-full bg-primary dark:bg-[#F0F0F3] shadow-sm"
+                  transition={{ type: "spring", bounce: 0.18, duration: 0.48 }}
+                />
+              )}
+              <span
+                className={cn(
+                  "relative z-10 transition-colors duration-200",
+                  activeTab === id
+                    ? "text-primary-foreground dark:text-[#18181b]"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {label}
+              </span>
             </button>
           ))}
         </div>
 
         {/* Founding window strip */}
-        <div className="flex items-center gap-2.5 px-4 py-2 rounded-full border border-secondary/20 bg-secondary/[0.06] dark:bg-secondary/10 select-none">
-          <span className="relative flex size-2 shrink-0">
+        <div className="flex items-center gap-2 px-4 py-[7px] rounded-full border border-secondary/20 bg-secondary/[0.05] dark:bg-secondary/[0.08] select-none">
+          <span className="relative flex size-[7px] shrink-0">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-secondary opacity-55" />
-            <span className="relative inline-flex size-2 rounded-full bg-secondary" />
+            <span className="relative inline-flex size-[7px] rounded-full bg-secondary" />
           </span>
-          <span className="font-semibold text-secondary text-[13px] tracking-tight">
+          <span className="text-[12px] font-semibold text-secondary tracking-tight">
             Founding window open
           </span>
-          <span className="text-border dark:text-border">·</span>
-          <span className="text-muted-foreground text-[13px]">
-            First 5 clients · up to 23% off standard
+          <span className="text-muted-foreground/30">·</span>
+          <span className="text-[12px] text-muted-foreground/70 tracking-tight">
+            First 5 clients · up to 23% off
           </span>
         </div>
       </div>
 
       {/* Cards */}
-      <div className="w-full max-w-6xl mx-auto px-6">
+      <div className="w-full max-w-4xl mx-auto px-6">
         <AnimatePresence mode="wait">
           {activeTab === "setup" ? (
             <motion.div
               key="setup"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
               transition={{ duration: 0.18 }}
               className="grid grid-cols-1 min-[650px]:grid-cols-2 gap-4 items-stretch"
             >
@@ -342,7 +374,7 @@ export function PricingSection() {
                 <PricingCard
                   key={tier.name}
                   tier={tier}
-                  delay={i * 0.07}
+                  delay={i * 0.06}
                   formatPrice={formatPrice}
                 />
               ))}
@@ -350,11 +382,11 @@ export function PricingSection() {
           ) : (
             <motion.div
               key="retainer"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
               transition={{ duration: 0.18 }}
-              className="max-w-lg mx-auto"
+              className="max-w-sm mx-auto"
             >
               {retainerTier && (
                 <PricingCard
