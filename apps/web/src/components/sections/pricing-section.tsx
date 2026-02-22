@@ -11,56 +11,8 @@ type PricingItem = (typeof siteConfig.pricing.pricingItems)[0] & {
 };
 
 export function PricingSection() {
-  const stripCad = (value: string) => value.replace(/\s*CAD/gi, "").trim();
   const formatPrice = (value: string) =>
-    `${stripCad(value)} CAD`;
-
-  const renderDiscountBlock = (tier: PricingItem) => {
-    if (!tier.launchOfferPrice || !tier.standardPrice) {
-      return <p className="text-sm text-muted-foreground">Standard: {formatPrice(tier.price)}</p>;
-    }
-
-    return (
-      <div className="mt-2">
-        <p className="text-[11px] uppercase tracking-[0.28em] text-secondary">Founding Offer</p>
-        <p className="text-xs text-muted-foreground">First 5 customers</p>
-        <div className="flex items-end gap-2 flex-wrap">
-          <p className="text-4xl md:text-5xl font-semibold leading-none">{formatPrice(tier.launchOfferPrice)}</p>
-          <p className="pb-1 text-sm text-muted-foreground line-through">
-            {formatPrice(tier.standardPrice)}
-          </p>
-        </div>
-        <p className="text-xs text-muted-foreground mt-1">Standard rate: {formatPrice(tier.standardPrice)}</p>
-      </div>
-    );
-  };
-
-  const PriceDisplay = ({
-    tier,
-  }: {
-    tier: PricingItem;
-  }) => {
-    return (
-      <div className="space-y-1">
-        <motion.span
-          key={tier.name}
-          className="text-4xl md:text-5xl font-semibold leading-none"
-          initial={{
-            opacity: 0,
-            x: 0,
-            filter: "blur(5px)",
-          }}
-          animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
-          transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
-        >
-          {tier.launchOfferPrice && tier.standardPrice
-            ? formatPrice(tier.launchOfferPrice)
-            : formatPrice(tier.price)}
-        </motion.span>
-        {renderDiscountBlock(tier)}
-      </div>
-    );
-  };
+    value.replace(/\s*CAD/gi, "").trim();
 
   return (
     <section
@@ -75,65 +27,165 @@ export function PricingSection() {
           {siteConfig.pricing.description}
         </p>
       </SectionHeader>
-      <div className="relative w-full h-full">
-        <div className="grid min-[650px]:grid-cols-2 min-[900px]:grid-cols-3 gap-4 w-full max-w-6xl mx-auto px-6">
-          {siteConfig.pricing.pricingItems.map((tier) => (
-            <div
+
+      {/* Founding window status strip */}
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.35, ease: [0.4, 0, 0.2, 1] }}
+        className="flex items-center gap-2.5 px-4 py-2 rounded-full border border-secondary/20 bg-secondary/[0.06] dark:bg-secondary/10 select-none"
+      >
+        <span className="relative flex size-2 shrink-0">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-secondary opacity-55" />
+          <span className="relative inline-flex size-2 rounded-full bg-secondary" />
+        </span>
+        <span className="font-semibold text-secondary text-[13px] tracking-tight">
+          Founding window open
+        </span>
+        <span className="text-border dark:text-border">·</span>
+        <span className="text-muted-foreground text-[13px]">
+          First 5 clients · up to 23% off standard
+        </span>
+      </motion.div>
+
+      <div className="relative w-full">
+        {/*
+          items-stretch: explicit — CSS grid stretches all cards to the
+          tallest sibling in each row. Combined with flex-col + grow on
+          the features section, this ensures equal-height cards.
+        */}
+        <div className="grid min-[650px]:grid-cols-2 min-[900px]:grid-cols-3 gap-4 w-full max-w-6xl mx-auto px-6 items-stretch">
+          {siteConfig.pricing.pricingItems.map((tier, i) => (
+            <motion.div
               key={tier.name}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4, delay: i * 0.08, ease: [0.4, 0, 0.2, 1] }}
               className={cn(
-                "rounded-3xl grid grid-rows-[auto_auto_1fr] relative h-fit min-[650px]:h-full min-[900px]:h-fit p-1 overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_20px_40px_-20px_rgba(0,0,0,0.20)]",
+                // flex-col: enables grow on inner sections for equal height
+                "rounded-3xl flex flex-col relative overflow-hidden transition-all duration-300",
                 tier.isPopular
-                  ? "bg-accent md:shadow-[0px_61px_24px_-10px_rgba(0,0,0,0.01),0px_34px_20px_-8px_rgba(0,0,0,0.05),0px_15px_15px_-6px_rgba(0,0,0,0.09),0px_4px_8px_-2px_rgba(0,0,0,0.10),0px_0px_0px_1px_rgba(0,0,0,0.08)] ring-1 ring-secondary/35"
-                  : "bg-[#F3F4F6] dark:bg-[#F9FAFB]/[0.02] border border-border/70",
+                  ? "bg-accent ring-2 ring-secondary/35 shadow-[0px_20px_48px_-12px_rgba(0,0,0,0.14)] hover:-translate-y-2 hover:shadow-[0px_32px_64px_-12px_rgba(0,0,0,0.20)]"
+                  : "bg-[#F3F4F6] dark:bg-[#F9FAFB]/[0.02] border border-border/70 hover:-translate-y-1 hover:shadow-[0_16px_40px_-12px_rgba(0,0,0,0.10)]",
               )}
             >
-              <div className="absolute inset-0 pointer-events-none opacity-[0.07] bg-[radial-gradient(circle_at_75%_25%,white_0%,transparent_55%)]" />
+              {/* Radial ambient highlight */}
+              <div className="absolute inset-0 pointer-events-none opacity-[0.06] bg-[radial-gradient(circle_at_70%_20%,white_0%,transparent_60%)]" />
+
+              {/* Top gradient line — recommended card only */}
+              {tier.isPopular && (
+                <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-secondary/65 to-transparent" />
+              )}
+
+              {/* ── Card header ── */}
               <div className="flex flex-col gap-4 p-5 relative z-10">
-                <p className="text-[11px] uppercase tracking-[0.3em] text-muted-foreground">
-                  {tier.name}
+                {/* Tier label row */}
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[10px] uppercase tracking-[0.32em] text-muted-foreground leading-none">
+                    {tier.name}
+                  </p>
                   {tier.isPopular && (
-                    <span className="bg-gradient-to-b from-secondary/50 from-[1.92%] to-secondary to-[100%] text-white h-6 inline-flex w-fit items-center justify-center px-2 rounded-full text-xs ml-3 shadow-[0px_6px_6px_-3px_rgba(0,0,0,0.08),0px_3px_3px_-1.5px_rgba(0,0,0,0.08),0px_1px_1px_-0.5px_rgba(0,0,0,0.08),0px_0px_0px_1px_rgba(255,255,255,0.12)_inset,0px_1px_0px_0px_rgba(255,255,255,0.12)_inset]">
+                    <span className="bg-gradient-to-b from-secondary/50 from-[1.92%] to-secondary to-[100%] text-white h-5 inline-flex shrink-0 items-center px-2.5 rounded-full text-[10px] font-semibold tracking-wide shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.12),0px_0px_0px_1px_rgba(255,255,255,0.14)_inset]">
                       Recommended
                     </span>
                   )}
-                </p>
-                <p className="text-2xl font-medium tracking-tight leading-tight">
-                  {tier.name.includes("Implementation")
-                    ? "Deployment service"
-                    : tier.name === "Managed Care"
-                      ? "Ongoing operations"
-                      : tier.name}
-                </p>
-                <div className="flex items-baseline mt-1">
-                  <PriceDisplay tier={tier} />
                 </div>
-                <p className="text-sm mt-2 text-muted-foreground leading-relaxed">
-                  {tier.description}
-                </p>
+
+                {/* Service label + description */}
+                <div>
+                  <p className="text-xl font-semibold tracking-tight leading-snug">
+                    {tier.name === "Remote Implementation"
+                      ? "Remote deployment"
+                      : tier.name === "In-Person Implementation"
+                        ? "On-site deployment"
+                        : "Ongoing operations"}
+                  </p>
+                  <p className="text-[13px] text-muted-foreground mt-1.5 leading-relaxed">
+                    {tier.description}
+                  </p>
+                </div>
+
+                {/* ── Price block ── */}
+                <div className="flex flex-col gap-0.5 pt-1 border-t border-border/50 dark:border-white/[0.06]">
+                  {/* Founding badge */}
+                  <div className="flex items-center gap-2 mb-2 mt-3">
+                    <span className="inline-flex items-center gap-1.5 px-2 py-[3px] rounded-md bg-secondary/[0.09] dark:bg-secondary/20 border border-secondary/20 dark:border-secondary/30 text-secondary text-[10px] font-bold uppercase tracking-[0.2em]">
+                      <svg
+                        width="7"
+                        height="7"
+                        viewBox="0 0 8 8"
+                        fill="currentColor"
+                        aria-hidden="true"
+                      >
+                        <path d="M4 0L5 3H8L5.5 5L6.5 8L4 6L1.5 8L2.5 5L0 3H3L4 0Z" />
+                      </svg>
+                      Founding offer
+                    </span>
+                    <span className="text-[11px] text-muted-foreground/50 font-medium">
+                      5 spots
+                    </span>
+                  </div>
+
+                  {/* Founding price + strikethrough standard */}
+                  <div className="flex items-baseline gap-3 flex-wrap">
+                    <motion.span
+                      key={`${tier.name}-price`}
+                      className="text-[2.625rem] md:text-5xl font-bold leading-none tracking-tighter tabular-nums"
+                      initial={{ opacity: 0, filter: "blur(5px)" }}
+                      animate={{ opacity: 1, filter: "blur(0px)" }}
+                      transition={{ duration: 0.28, delay: i * 0.08 + 0.14 }}
+                    >
+                      {(tier as PricingItem).launchOfferPrice
+                        ? formatPrice((tier as PricingItem).launchOfferPrice!)
+                        : formatPrice(tier.price)}
+                    </motion.span>
+                    {(tier as PricingItem).standardPrice &&
+                      (tier as PricingItem).launchOfferPrice && (
+                        <span className="text-sm text-muted-foreground line-through pb-1 opacity-45 tabular-nums font-medium">
+                          {formatPrice((tier as PricingItem).standardPrice!)}
+                        </span>
+                      )}
+                  </div>
+
+                  {/* Standard rate footnote */}
+                  {(tier as PricingItem).standardPrice &&
+                    (tier as PricingItem).launchOfferPrice && (
+                      <p className="text-[11px] text-muted-foreground/45 mt-1">
+                        {formatPrice((tier as PricingItem).standardPrice!)} after launch window
+                      </p>
+                    )}
+                </div>
               </div>
 
-              <div className="flex flex-col gap-2 p-5 pt-0">
+              {/* ── CTA ── */}
+              <div className="px-5 pb-5 relative z-10">
                 <button
-                  className={`h-10 w-full flex items-center justify-center text-sm font-normal tracking-wide rounded-full px-4 cursor-pointer transition-all ease-out active:scale-95 ${
+                  className={cn(
+                    "h-10 w-full flex items-center justify-center text-sm font-medium tracking-wide rounded-full px-4 cursor-pointer transition-all ease-out active:scale-[0.97]",
                     tier.isPopular
-                      ? `${tier.buttonColor} shadow-[0_10px_20px_-8px_rgba(245,158,11,0.45)]` +
-                        " transition-transform duration-200 hover:-translate-y-0.5"
-                      : `${tier.buttonColor} shadow-[0px_1px_2px_0px_rgba(255,255,255,0.16)_inset,0px_3px_3px_-1.5px_rgba(16,24,40,0.24),0px_1px_1px_-0.5px_rgba(16,24,40,0.20)]`
-                  }`}
+                      ? `${tier.buttonColor} shadow-[0_10px_24px_-8px_rgba(43,127,255,0.50)] hover:-translate-y-0.5 duration-200`
+                      : `${tier.buttonColor} shadow-[0px_1px_2px_0px_rgba(255,255,255,0.16)_inset,0px_3px_3px_-1.5px_rgba(16,24,40,0.22),0px_1px_1px_-0.5px_rgba(16,24,40,0.18)]`,
+                  )}
                 >
                   {tier.buttonText}
                 </button>
               </div>
-              <hr className="border-border dark:border-white/20" />
-              <div className="p-4">
-                <ul className="space-y-3">
+
+              {/* ── Divider ── */}
+              <hr className="border-border dark:border-white/[0.07] mx-5" />
+
+              {/* ── Feature list ── grow fills remaining height so all cards align */}
+              <div className="p-5 grow relative z-10">
+                <p className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground/45 mb-3.5">
+                  Includes
+                </p>
+                <ul className="space-y-2.5">
                   {tier.features.map((feature) => (
-                    <li key={feature} className="flex items-center gap-2">
+                    <li key={feature} className="flex items-start gap-2.5">
                       <div
                         className={cn(
-                          "size-5 rounded-full border border-primary/20 flex items-center justify-center",
-                          tier.isPopular &&
-                            "bg-muted-foreground/40 border-border",
+                          "size-5 rounded-full border border-primary/20 flex items-center justify-center shrink-0 mt-0.5",
+                          tier.isPopular && "bg-muted-foreground/40 border-border",
                         )}
                       >
                         <div className="size-3 flex items-center justify-center">
@@ -144,6 +196,7 @@ export function PricingSection() {
                             fill="none"
                             xmlns="http://www.w3.org/2000/svg"
                             className="block dark:hidden"
+                            aria-hidden="true"
                           >
                             <path
                               d="M1.5 3.48828L3.375 5.36328L6.5 0.988281"
@@ -153,7 +206,6 @@ export function PricingSection() {
                               strokeLinejoin="round"
                             />
                           </svg>
-
                           <svg
                             width="8"
                             height="7"
@@ -161,6 +213,7 @@ export function PricingSection() {
                             fill="none"
                             xmlns="http://www.w3.org/2000/svg"
                             className="hidden dark:block"
+                            aria-hidden="true"
                           >
                             <path
                               d="M1.5 3.48828L3.375 5.36328L6.5 0.988281"
@@ -172,12 +225,12 @@ export function PricingSection() {
                           </svg>
                         </div>
                       </div>
-                      <span className="text-sm">{feature}</span>
+                      <span className="text-sm leading-snug">{feature}</span>
                     </li>
                   ))}
                 </ul>
               </div>
-            </div>
+            </motion.div>
           ))}
         </div>
       </div>
