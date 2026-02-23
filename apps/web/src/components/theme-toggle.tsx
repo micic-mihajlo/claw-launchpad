@@ -2,50 +2,68 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Moon, Sun } from "lucide-react";
-import { useTheme } from "next-themes";
 import { flushSync } from "react-dom";
 import { cn } from "@/lib/utils";
 
-type ViewTransitionDocument = Document & {
-  startViewTransition?: (update: () => void) => { ready: Promise<void> };
-};
-
-interface ThemeToggleProps extends React.ComponentPropsWithoutRef<"button"> {
+interface AnimatedThemeTogglerProps
+  extends React.ComponentPropsWithoutRef<"button"> {
   duration?: number;
 }
 
-export function ThemeToggle({ className, duration = 400, ...props }: ThemeToggleProps) {
-  const { resolvedTheme, setTheme } = useTheme();
-  const [mounted, setMounted] = useState(false);
+type ViewTransitionDocument = Document & {
+  startViewTransition?: (callback: () => void) => {
+    ready: Promise<void>;
+  };
+};
+
+export function ThemeToggle({
+  className,
+  duration = 400,
+  ...props
+}: AnimatedThemeTogglerProps) {
+  const [isDark, setIsDark] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    setMounted(true);
+    const updateTheme = () => {
+      setIsDark(document.documentElement.classList.contains("dark"));
+    };
+
+    updateTheme();
+
+    const observer = new MutationObserver(updateTheme);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+
+    return () => observer.disconnect();
   }, []);
 
   const toggleTheme = useCallback(async () => {
-    if (!mounted || !buttonRef.current) {
+    if (!buttonRef.current) {
       return;
     }
 
-    const isDark = resolvedTheme === "dark";
-    const nextTheme = isDark ? "light" : "dark";
     const doc = document as ViewTransitionDocument;
+    const nextThemeIsDark = !isDark;
 
     if (!doc.startViewTransition) {
-      setTheme(nextTheme);
+      setIsDark(nextThemeIsDark);
+      document.documentElement.classList.toggle("dark");
+      localStorage.setItem("theme", nextThemeIsDark ? "dark" : "light");
       return;
     }
 
-    await doc
-      .startViewTransition(() => {
-        flushSync(() => {
-          setTheme(nextTheme);
-        });
-      })
-      .ready;
+    await doc.startViewTransition(() => {
+      flushSync(() => {
+        setIsDark(nextThemeIsDark);
+        document.documentElement.classList.toggle("dark");
+        localStorage.setItem("theme", nextThemeIsDark ? "dark" : "light");
+      });
+    }).ready;
 
-    const { left, top, width, height } = buttonRef.current.getBoundingClientRect();
+    const { top, left, width, height } = buttonRef.current.getBoundingClientRect();
     const x = left + width / 2;
     const y = top + height / 2;
     const maxRadius = Math.hypot(
@@ -66,33 +84,24 @@ export function ThemeToggle({ className, duration = 400, ...props }: ThemeToggle
         pseudoElement: "::view-transition-new(root)",
       },
     );
-  }, [duration, mounted, resolvedTheme, setTheme]);
-
-  const isDark = resolvedTheme === "dark";
+  }, [duration, isDark]);
 
   return (
     <button
       ref={buttonRef}
-      type="button"
       onClick={toggleTheme}
       className={cn(
-        "relative cursor-pointer rounded-full h-8 w-8 border border-input bg-background shadow-xs hover:bg-accent transition-colors inline-flex items-center justify-center",
+        "relative inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-input bg-background shadow-xs transition-colors hover:bg-accent",
         className,
       )}
+      type="button"
       {...props}
     >
-      <Sun
-        className={cn(
-          "h-[1.2rem] w-[1.2rem] text-primary transition-all",
-          isDark ? "-rotate-90 scale-0" : "rotate-0 scale-100",
-        )}
-      />
-      <Moon
-        className={cn(
-          "absolute h-[1.2rem] w-[1.2rem] text-primary transition-all",
-          isDark ? "rotate-0 scale-100" : "rotate-90 scale-0",
-        )}
-      />
+      {isDark ? (
+        <Sun className="h-[1.2rem] w-[1.2rem] text-primary" />
+      ) : (
+        <Moon className="h-[1.2rem] w-[1.2rem] text-primary" />
+      )}
       <span className="sr-only">Toggle theme</span>
     </button>
   );
