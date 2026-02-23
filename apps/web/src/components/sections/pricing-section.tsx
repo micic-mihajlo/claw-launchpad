@@ -7,26 +7,25 @@ import { siteConfig } from "@/lib/config";
 import { cn } from "@/lib/utils";
 
 type PricingItem = (typeof siteConfig.pricing.pricingItems)[0] & {
+  planType?: "setup" | "managed";
   launchOfferPrice?: string;
   standardPrice?: string;
 };
 
-type Tab = "setup" | "retainer";
-
-// ── Helpers ────────────────────────────────────────────────────────────────
+type Tab = "setup" | "managed";
 
 function parseDollars(v: string): number {
   return parseFloat(v.replace(/[^0-9.]/g, "")) || 0;
 }
 
 function getSavingsPct(founding: string, standard: string): number {
-  const f = parseDollars(founding);
-  const s = parseDollars(standard);
-  if (!f || !s || f >= s) return 0;
-  return Math.round((1 - f / s) * 100);
+  const foundingValue = parseDollars(founding);
+  const standardValue = parseDollars(standard);
+  if (!foundingValue || !standardValue || foundingValue >= standardValue) {
+    return 0;
+  }
+  return Math.round((1 - foundingValue / standardValue) * 100);
 }
-
-// ── Icons ──────────────────────────────────────────────────────────────────
 
 function RemoteIcon() {
   return (
@@ -67,7 +66,7 @@ function OnSiteIcon() {
   );
 }
 
-function RetainerIcon() {
+function ManagedIcon() {
   return (
     <svg
       width="19"
@@ -85,7 +84,6 @@ function RetainerIcon() {
   );
 }
 
-// Single-path check — no circle wrapper, secondary color
 function FeatureCheck() {
   return (
     <svg
@@ -107,8 +105,6 @@ function FeatureCheck() {
   );
 }
 
-// ── Tier metadata ──────────────────────────────────────────────────────────
-
 const TIER_META: Record<string, { icon: React.ReactNode; label: string }> = {
   "Remote Implementation": {
     icon: <RemoteIcon />,
@@ -118,13 +114,23 @@ const TIER_META: Record<string, { icon: React.ReactNode; label: string }> = {
     icon: <OnSiteIcon />,
     label: "On-site deployment",
   },
-  "Managed Care": {
-    icon: <RetainerIcon />,
-    label: "Ongoing operations",
+  "Additional Agent (Per Agent)": {
+    icon: <ManagedIcon />,
+    label: "Per-agent add-on",
+  },
+  Starter: {
+    icon: <ManagedIcon />,
+    label: "Managed care tier",
+  },
+  Growth: {
+    icon: <ManagedIcon />,
+    label: "Managed care tier",
+  },
+  Scale: {
+    icon: <ManagedIcon />,
+    label: "Managed care tier",
   },
 };
-
-// ── Pricing card ───────────────────────────────────────────────────────────
 
 function PricingCard({
   tier,
@@ -133,14 +139,15 @@ function PricingCard({
 }: {
   tier: PricingItem;
   delay?: number;
-  formatPrice: (v: string) => string;
+  formatPrice: (value: string) => string;
 }) {
   const meta = TIER_META[tier.name] ?? { icon: null, label: tier.name };
   const foundingPrice = tier.launchOfferPrice ?? tier.price;
-  const hasDiscount = !!(tier.launchOfferPrice && tier.standardPrice);
-  const pct = hasDiscount
-    ? getSavingsPct(tier.launchOfferPrice!, tier.standardPrice!)
-    : 0;
+  const hasDiscount = Boolean(tier.launchOfferPrice && tier.standardPrice);
+  const savingsPct =
+    hasDiscount && tier.launchOfferPrice && tier.standardPrice
+      ? getSavingsPct(tier.launchOfferPrice, tier.standardPrice)
+      : 0;
 
   return (
     <motion.div
@@ -165,13 +172,11 @@ function PricingCard({
             ].join(" "),
       )}
     >
-      {/* Popular: vivid top gradient line */}
       {tier.isPopular && (
         <div className="h-[1.5px] bg-gradient-to-r from-secondary/10 via-secondary to-secondary/10" />
       )}
 
       <div className="flex flex-col p-6 flex-1">
-        {/* ── Header: icon + label + recommended ── */}
         <div className="flex items-center justify-between gap-3 mb-6">
           <div className="flex items-center gap-3">
             <div
@@ -195,7 +200,6 @@ function PricingCard({
           )}
         </div>
 
-        {/* ── Price block ── */}
         <div className="mb-6">
           <div className="flex items-end gap-3 flex-wrap mb-1">
             <motion.span
@@ -206,35 +210,32 @@ function PricingCard({
             >
               {formatPrice(foundingPrice)}
             </motion.span>
-            {hasDiscount && (
+            {hasDiscount && tier.standardPrice && (
               <div className="flex items-center gap-2 mb-2">
                 <span className="text-[15px] text-muted-foreground/40 line-through tabular-nums font-medium">
-                  {formatPrice(tier.standardPrice!)}
+                  {formatPrice(tier.standardPrice)}
                 </span>
-                {pct > 0 && (
+                {savingsPct > 0 && (
                   <span className="text-[11px] font-bold text-secondary bg-secondary/[0.10] dark:bg-secondary/[0.18] px-2 py-[3px] rounded-full">
-                    Save {pct}%
+                    Save {savingsPct}%
                   </span>
                 )}
               </div>
             )}
           </div>
-          {hasDiscount && (
+          {hasDiscount && tier.standardPrice && (
             <p className="text-[11px] text-muted-foreground/35 mt-0.5 tracking-tight">
-              {formatPrice(tier.standardPrice!)} standard after launch window
+              {formatPrice(tier.standardPrice)} standard after launch window
             </p>
           )}
         </div>
 
-        {/* ── Thin rule ── */}
         <div className="h-px bg-black/[0.06] dark:bg-white/[0.06] mb-5" />
 
-        {/* ── Description ── */}
         <p className="text-[13px] text-muted-foreground/80 leading-relaxed mb-5">
           {tier.description}
         </p>
 
-        {/* ── Features — flex-1 pins CTA to bottom ── */}
         <ul className="flex flex-col gap-[11px] flex-1 mb-6">
           {tier.features.map((feature) => (
             <li key={feature} className="flex items-start gap-2.5">
@@ -246,7 +247,6 @@ function PricingCard({
           ))}
         </ul>
 
-        {/* ── CTA ── */}
         <div className="flex flex-col gap-2.5">
           <button
             className={cn(
@@ -259,7 +259,6 @@ function PricingCard({
             {tier.buttonText}
           </button>
 
-          {/* Founding whisper */}
           <p className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground/38 tracking-tight">
             <svg
               width="8"
@@ -279,23 +278,19 @@ function PricingCard({
   );
 }
 
-// ── Section ────────────────────────────────────────────────────────────────
-
 export function PricingSection() {
   const [activeTab, setActiveTab] = useState<Tab>("setup");
   const formatPrice = (value: string) => value.replace(/\s*CAD/gi, "").trim();
 
-  const setupTiers = siteConfig.pricing.pricingItems.filter((t) =>
-    t.name.includes("Implementation"),
-  ) as PricingItem[];
-
-  const retainerTier = siteConfig.pricing.pricingItems.find(
-    (t) => t.name === "Managed Care",
-  ) as PricingItem | undefined;
+  const pricingItems = siteConfig.pricing.pricingItems as PricingItem[];
+  const setupTiers = pricingItems.filter(
+    (tier) => tier.planType === "setup" || tier.name.includes("Implementation"),
+  );
+  const managedTiers = pricingItems.filter((tier) => tier.planType === "managed");
 
   const tabs: { id: Tab; label: string }[] = [
     { id: "setup", label: "Get Started" },
-    { id: "retainer", label: "Managed Care" },
+    { id: "managed", label: "Managed Care" },
   ];
 
   return (
@@ -313,7 +308,6 @@ export function PricingSection() {
       </SectionHeader>
 
       <div className="flex flex-col items-center gap-4">
-        {/* Spring-animated tab switcher */}
         <div className="flex items-center gap-0.5 p-1 rounded-full bg-black/[0.04] dark:bg-white/[0.04] border border-black/[0.07] dark:border-white/[0.07]">
           {tabs.map(({ id, label }) => (
             <button
@@ -342,7 +336,6 @@ export function PricingSection() {
           ))}
         </div>
 
-        {/* Founding window strip */}
         <div className="flex items-center gap-2 px-4 py-[7px] rounded-full border border-secondary/20 bg-secondary/[0.05] dark:bg-secondary/[0.08] select-none">
           <span className="relative flex size-[7px] shrink-0">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-secondary opacity-55" />
@@ -353,13 +346,12 @@ export function PricingSection() {
           </span>
           <span className="text-muted-foreground/30">·</span>
           <span className="text-[12px] text-muted-foreground/70 tracking-tight">
-            First 5 clients · up to 23% off
+            First 5 clients · up to 29% off
           </span>
         </div>
       </div>
 
-      {/* Cards */}
-      <div className="w-full max-w-4xl mx-auto px-6">
+      <div className="w-full max-w-6xl mx-auto px-6">
         <AnimatePresence mode="wait">
           {activeTab === "setup" ? (
             <motion.div
@@ -368,33 +360,34 @@ export function PricingSection() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -4 }}
               transition={{ duration: 0.18 }}
-              className="grid grid-cols-1 min-[650px]:grid-cols-2 gap-4 items-stretch"
+              className="grid grid-cols-1 min-[650px]:grid-cols-2 min-[980px]:grid-cols-3 gap-4 items-stretch"
             >
-              {setupTiers.map((tier, i) => (
+              {setupTiers.map((tier, index) => (
                 <PricingCard
                   key={tier.name}
                   tier={tier}
-                  delay={i * 0.06}
+                  delay={index * 0.06}
                   formatPrice={formatPrice}
                 />
               ))}
             </motion.div>
           ) : (
             <motion.div
-              key="retainer"
+              key="managed"
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -4 }}
               transition={{ duration: 0.18 }}
-              className="max-w-sm mx-auto"
+              className="grid grid-cols-1 min-[650px]:grid-cols-2 min-[980px]:grid-cols-3 gap-4 items-stretch"
             >
-              {retainerTier && (
+              {managedTiers.map((tier, index) => (
                 <PricingCard
-                  tier={retainerTier}
-                  delay={0}
+                  key={tier.name}
+                  tier={tier}
+                  delay={index * 0.06}
                   formatPrice={formatPrice}
                 />
-              )}
+              ))}
             </motion.div>
           )}
         </AnimatePresence>
