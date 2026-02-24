@@ -43,12 +43,6 @@ export function FeatureSection() {
                     loading="lazy"
                   />
                   <div className="absolute inset-0 bg-gradient-to-tr from-black/45 via-black/20 to-transparent" />
-                  <div className="absolute left-3 top-3 inline-flex items-center gap-2 rounded-full border border-white/25 bg-black/35 px-2.5 py-1 text-[11px] uppercase tracking-[0.16em] text-white/90">
-                    <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-secondary text-white text-[10px] font-semibold">
-                      {item.id}
-                    </span>
-                    Step 0{item.id}
-                  </div>
                 </div>
 
                 <div className="p-5">

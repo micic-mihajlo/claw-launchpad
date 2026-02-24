@@ -4,10 +4,10 @@ import { Navbar } from "@/components/sections/navbar";
 import { BentoSection } from "@/components/sections/bento-section";
 import { QuoteSection } from "@/components/sections/quote-section";
 import { BasicsSection } from "@/components/sections/basics-section";
-import { FeatureSection } from "@/components/sections/feature-section";
+import { UseCasesSection } from "@/components/sections/use-cases-section";
+import { ObjectionSection } from "@/components/sections/objection-section";
 import { GrowthSection } from "@/components/sections/growth-section";
 import { PricingSection } from "@/components/sections/pricing-section";
-import { TestimonialSection } from "@/components/sections/testimonial-section";
 import { FAQSection } from "@/components/sections/faq-section";
 import { CTASection } from "@/components/sections/cta-section";
 import { FooterSection } from "@/components/sections/footer-section";
@@ -25,10 +25,10 @@ export function PublicLanding() {
           <BentoSection />
           <QuoteSection />
           <BasicsSection />
-          <FeatureSection />
+          <UseCasesSection />
+          <ObjectionSection />
           <GrowthSection />
           <PricingSection />
-          <TestimonialSection />
           <FAQSection />
           <CTASection />
           <FooterSection />
