@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { SectionHeader } from "@/components/section-header";
+import { Highlighter } from "@/components/ui/highlighter";
 import { siteConfig } from "@/lib/config";
 import { cn } from "@/lib/utils";
 
@@ -281,6 +282,9 @@ function PricingCard({
 export function PricingSection() {
   const [activeTab, setActiveTab] = useState<Tab>("setup");
   const formatPrice = (value: string) => value.replace(/\s*CAD/gi, "").trim();
+  const pricingLead = "Five founding spots available.";
+  const pricingDescription = siteConfig.pricing.description;
+  const pricingTail = pricingDescription.replace(pricingLead, "").trim();
 
   const pricingItems = siteConfig.pricing.pricingItems as PricingItem[];
   const setupTiers = pricingItems.filter(
@@ -303,7 +307,19 @@ export function PricingSection() {
           {siteConfig.pricing.title}
         </h2>
         <p className="text-muted-foreground text-center text-balance font-medium">
-          {siteConfig.pricing.description}
+          <Highlighter
+            action="highlight"
+            color="rgba(43,127,255,0.16)"
+            strokeWidth={1.2}
+            animationDuration={550}
+            iterations={1}
+            padding={1}
+            multiline={false}
+            isView
+          >
+            {pricingLead}
+          </Highlighter>{" "}
+          {pricingTail}
         </p>
       </SectionHeader>
 

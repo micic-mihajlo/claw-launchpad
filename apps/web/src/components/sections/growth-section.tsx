@@ -1,6 +1,7 @@
 "use client";
 
 import { SectionHeader } from "@/components/section-header";
+import { Highlighter } from "@/components/ui/highlighter";
 import { siteConfig } from "@/lib/config";
 
 export function GrowthSection() {
@@ -22,7 +23,18 @@ export function GrowthSection() {
             {title}
           </h2>
           <p className="text-muted-foreground text-center text-balance font-medium">
-            {description}
+            <Highlighter
+              action="underline"
+              color="rgba(43,127,255,0.5)"
+              strokeWidth={1.6}
+              animationDuration={600}
+              iterations={1}
+              padding={3}
+              multiline={false}
+              isView
+            >
+              {description}
+            </Highlighter>
           </p>
         </SectionHeader>
 

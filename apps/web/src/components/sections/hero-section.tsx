@@ -1,4 +1,5 @@
 import { HeroVideoSection } from "@/components/sections/hero-video-section";
+import { Highlighter } from "@/components/ui/highlighter";
 import { siteConfig } from "@/lib/config";
 
 export function HeroSection() {
@@ -17,7 +18,18 @@ export function HeroSection() {
           </p>
           <div className="flex flex-col items-center justify-center gap-5">
             <h1 className="text-3xl md:text-4xl lg:text-5xl xl:text-6xl font-medium tracking-tighter text-balance text-center text-primary">
-              {hero.title}
+              <Highlighter
+                action="underline"
+                color="rgba(43,127,255,0.55)"
+                strokeWidth={2}
+                animationDuration={700}
+                iterations={2}
+                padding={4}
+                multiline={false}
+                isView
+              >
+                {hero.title}
+              </Highlighter>
             </h1>
             <p className="text-base md:text-lg text-center text-muted-foreground font-medium text-balance leading-relaxed tracking-tight">
               {hero.description}

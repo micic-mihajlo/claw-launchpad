@@ -53,7 +53,7 @@ export const siteConfig = {
       { id: 1, name: "Home", href: "#hero" },
       { id: 2, name: "How it Works", href: "#bento" },
       { id: 3, name: "The Basics", href: "#basics" },
-      { id: 4, name: "Features", href: "#features" },
+      { id: 4, name: "Features", href: "#use-cases" },
       { id: 5, name: "Pricing", href: "#pricing" },
     ],
   },
@@ -75,7 +75,7 @@ export const siteConfig = {
     badge: "Toronto + Miami · in-person + remote worldwide",
     title: "Private AI, Deployed on Your Terms",
     description:
-      "Executive teams get operational AI without the infrastructure guesswork. We deploy OpenClaw agents on your own hardware, wire them to your stack, harden the environment, and keep them running so teams can automate with confidence.",
+      "Executive teams get operational AI without the infrastructure guesswork. Every rollout is scoped to your workflows, security requirements, and operating model. We deploy OpenClaw on your hardware, connect your tools, harden the environment, and keep it running.",
     cta: {
       primary: {
         text: "Book a call →",
@@ -291,13 +291,13 @@ export const siteConfig = {
   featureSection: {
     title: "How It Works",
     description:
-      "We connect to where your team already works, install tightly controlled agents, and move to dependable AI execution without handing over your data.",
+      "We map your team workflows first, then deploy tightly controlled agents in your environment so operations can run reliably without handing over your data.",
     items: [
       {
         id: 1,
         title: "Tool-First Integration",
         content:
-          "We connect OpenClaw to your existing stack—Gmail, Calendar, Slack, Notion, Drive, Zoom, Salesforce, WhatsApp, GitHub, Linear, and more—so no process needs to be reinvented.",
+          "We connect OpenClaw to your existing stack—Gmail, Calendar, Slack, Notion, Drive, Zoom, Salesforce, WhatsApp, GitHub, Linear, and more—based on how your team already works, so no process needs to be reinvented.",
         image:
           "https://images.unsplash.com/photo-1720371300677-ba4838fa0678?q=80&w=2070&auto=format&fit=crop&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D",
       },
@@ -321,7 +321,7 @@ export const siteConfig = {
         id: 4,
         title: "Deployment That Scales Cleanly",
         content:
-          "Teams usually start with one to six agents. As workflows expand, ownership and controls stay clean because each agent is isolated by purpose and boundary.",
+          "Teams usually start with one to six agents. As workflows expand, ownership and controls stay clean because each agent is isolated by role, access boundary, and operating context.",
         image:
           "https://images.unsplash.com/photo-1666882990322-e7f3b8df4f75?w=500&auto=format&fit=crop&q=60&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1yZWxhdGVkfDF8fHxlbnwwfHx8fHw%3D",
       },
@@ -713,7 +713,7 @@ export const siteConfig = {
 
         title: "Advanced Task Security",
         description:
-          "OpenClaw is deployed on your hardware so your data remains under your control.",
+          "OpenClaw is deployed on your hardware so your data remains under your control, with access provisioned per agent and reviewed during rollout.",
       },
       {
         id: 2,
@@ -741,7 +741,7 @@ export const siteConfig = {
   pricing: {
     title: "Founding Rates",
     description:
-      "Five founding spots available. Lock in reduced rates now — standard pricing takes effect once the launch window fills.",
+      "Five founding spots available. Engagements are scoped to each team, then delivered on fixed rate cards. Lock in reduced rates now before standard pricing resumes.",
     pricingItems: [
       {
         planType: "setup",
